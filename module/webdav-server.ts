@@ -142,7 +142,9 @@ export class WebdavServer {
                 });
             }
             setHeader(res, {
-                'allow': Object.keys(this.methodHandler).map(e => e.toUpperCase()).join(', ')
+                'allow': Object.keys(this.methodHandler).map(e => e.toUpperCase()).join(', '),
+                'last-modified': fileStat.mtime.toUTCString(),
+                etag: fileStat.ino
             })
             return res.end();
         },
