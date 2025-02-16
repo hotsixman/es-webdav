@@ -2,8 +2,9 @@ import * as http1 from "node:http";
 import * as http2 from "node:http2";
 import * as fs from 'node:fs';
 import * as mime from 'mime-types';
-import { setHeader, joinPath, GETHEADHeaderGenerator, writeFile, decodePath } from "./func.js";
+import escapeRegexp, { setHeader, joinPath, writeFile, decodePath, rmDirectory } from "./func.js";
 import { createPropfindXML } from "./xml/propfind.js";
+import { createDeleteXML } from "./xml/delete.js";
 
 function getHttp(version: 'http' | 'http2') {
     if (version === "http") {
@@ -17,10 +18,10 @@ function getHttp(version: 'http' | 'http2') {
 export class WebdavServer {
     // static
     /**
-     * @todo DELETE, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK
+     * @todo PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK
      */
     static methodHandler: Record<string, RequestHandler> = {
-        option: (_, res) => {
+        option(_, res) {
             res.statusCode = 200;
             setHeader(res, {
                 'dav': '1',
@@ -30,8 +31,8 @@ export class WebdavServer {
             res.end();
             return;
         },
-        get: async (req, res, server) => {
-            const reqPath = req.url;
+        async get(req, res, server) {
+            const reqPath = decodePath(req.url);
             const filePath = joinPath(server.option.rootPath, reqPath);
 
             if (!fs.existsSync(filePath)) {
@@ -110,8 +111,8 @@ export class WebdavServer {
                 return res.end();
             }
         },
-        head: async (req, res, server) => {
-            const reqPath = req.url;
+        async head(req, res, server) {
+            const reqPath = decodePath(req.url);
             const filePath = joinPath(server.option.rootPath, reqPath);
 
             if (!fs.existsSync(filePath)) {
@@ -148,8 +149,8 @@ export class WebdavServer {
             })
             return res.end();
         },
-        put: async (req, res, server) => {
-            const reqPath = req.url;
+        async put(req, res, server) {
+            const reqPath = decodePath(req.url);
             const filePath = joinPath(server.option.rootPath, reqPath);
 
             const alreadyExists = fs.existsSync(filePath);
@@ -162,14 +163,14 @@ export class WebdavServer {
             }
             return res.end();
         },
-        overwrite: async (req, res, server) => {
+        async overwrite(req, res, server) {
             const { overwrite } = req.headers;
             if (!overwrite || (overwrite as string).toUpperCase() !== "T") {
                 res.statusCode = 412;
                 return res.end();
             }
 
-            const reqPath = req.url;
+            const reqPath = decodePath(req.url);
             const filePath = joinPath(server.option.rootPath, reqPath);
             const alreadyExists = fs.existsSync(filePath);
             await writeFile(req, filePath);
@@ -186,8 +187,8 @@ export class WebdavServer {
          * - `depth` 구현
          * - `D:prop`에 사용할 `property` 추가
          */
-        propfind: async (req, res, server) => {
-            const reqPath = req.url;
+        async propfind(req, res, server) {
+            const reqPath = decodePath(req.url);
             const filePath = joinPath(server.option.rootPath, reqPath);
 
             const depth = Number(req.headers.depth) as (0 | 1) ?? 0;
@@ -211,7 +212,6 @@ export class WebdavServer {
                     reqPath,
                     depth
                 });
-                console.log(responseXML);
                 return res.end(responseXML);
             }
             catch (err) {
@@ -222,6 +222,33 @@ export class WebdavServer {
             function send500() {
                 res.statusCode = 500;
                 res.write('<?xml version="1.0"?><error>500 Internal Server Error</error>');
+                return res.end();
+            }
+        },
+        async delete(req, res, server){
+            const reqPath = decodePath(req.url);
+            const filePath = joinPath(server.option.rootPath, reqPath);
+
+            if(!fs.existsSync(filePath)){
+                res.statusCode = 404;
+                return res.end();
+            }
+
+            const fileStat = fs.statSync(filePath);
+
+            if(fileStat.isDirectory()){
+                const basePath = joinPath(server.option.rootPath);
+                const removedPaths = rmDirectory(filePath).map(p => p.replace(new RegExp(`^${escapeRegexp(basePath)}(.*)`), '$1'));
+                const responseXML = createDeleteXML(removedPaths);
+                res.statusCode = 207;
+                setHeader(res, {
+                    'Content-type': 'application/xml; charset="utf-8"'
+                })
+                return res.end(responseXML);
+            }
+            else{
+                fs.rmSync(filePath);
+                res.statusCode = 204;
                 return res.end();
             }
         }
@@ -240,7 +267,6 @@ export class WebdavServer {
         }
 
         this.httpServer = getHttp(this.option.version).createServer(async (req, res) => {
-            req.url = decodePath(req.url);
             if (this.option.middlewares) {
                 for (const middleware of this.option.middlewares) {
                     await middleware(req, res, this);

@@ -77,8 +77,8 @@ export function* GETHEADHeaderGenerator(req: Http2ServerRequest, res: Http2Serve
  */
 export async function writeFile(req: Http2ServerRequest, filePath: string) {
     const folderPath = path.dirname(filePath);
-    if(!fs.existsSync(folderPath)){
-        fs.mkdirSync(folderPath, {recursive: true});
+    if (!fs.existsSync(folderPath)) {
+        fs.mkdirSync(folderPath, { recursive: true });
     }
     const writeStream = fs.createWriteStream(filePath);
     try {
@@ -89,15 +89,66 @@ export async function writeFile(req: Http2ServerRequest, filePath: string) {
         });
         writeStream.end();
     }
-    catch(err) {
+    catch (err) {
         writeStream.end();
         throw err;
     }
 }
 
-export function encodePath(path: string){
+export function encodePath(path: string) {
     return path.split('/').map(encodeURIComponent).join('/');
 }
-export function decodePath(path: string){
+export function decodePath(path: string) {
     return path.split('/').map(decodeURIComponent).join('/');
+}
+
+/**
+ * pipe
+ */
+export function pipe(value: any, funcArr: ((arg: any) => any)[]) {
+    for (const func of funcArr) {
+        value = func(value);
+    };
+    return value;
+}
+export async function asyncPipe(value: any, funcArr: ((arg: any) => any | Promise<any>)[]) {
+    for (const func of funcArr) {
+        value = await func(value);
+    };
+    return value;
+}
+
+/**
+ * 폴더와 하위 폴더 모두 삭제
+ * 삭제 후 삭제 한 파일 및 폴더 전체 경로 배열 반환
+ * @param path 
+ * @returns 
+ */
+export function rmDirectory(path: string) {
+    const paths: string[] = [];
+    const subPaths = fs.readdirSync(path).map(e => joinPath(path, e));
+    for (const subPath of subPaths) {
+        const fileStat = fs.statSync(subPath);
+        if (fileStat.isDirectory()) {
+            const removedPaths = rmDirectory(subPath);
+            paths.push(...removedPaths);
+        }
+        else {
+            fs.rmSync(subPath);
+            paths.push(subPath);
+        }
+    }
+    fs.rmdirSync(path);
+    paths.push(path);
+    return paths;
+}
+
+export default function escapeRegexp(string: string) {
+    if (typeof string !== 'string') {
+        throw new TypeError('Expected a string');
+    }
+
+    return string
+        .replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')
+        .replace(/-/g, '\\x2d');
 }
