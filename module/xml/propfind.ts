@@ -2,39 +2,49 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { DOMParser, XMLSerializer } from "xmldom";
 import * as mime from 'mime-types';
-import { encodePath, joinPath } from "../func.js";
+import { decodePath, encodePath, getEtag, joinPath } from "../func.js";
+import { WebdavServer } from "../webdav-server.js";
 
 /**
  * @todo depth 구현
  * @param param0 
  */
-export function createPropfindXML({ rootPath, reqPath, depth }: PropfindArgs) {
+export function createPropfindXML({ server, reqPath, depth }: PropfindArgs) {
     depth = depth ?? 0;
-    const stat = fs.statSync(joinPath(rootPath, reqPath));
+    const stat = fs.statSync(server.getFilePath(reqPath));
     const xml = createPropfindXMLBase();
     const DMultistatus = xml.childNodes[0];
     if (stat.isDirectory()) {
-        const DResponseArr = createDResponsesInDirectory({ rootPath, reqPath, depth });
+        const DResponseArr = createDResponsesInDirectory({ server, reqPath, depth });
         DResponseArr.forEach(DResponse => {
             DMultistatus.appendChild(DResponse);
         })
+        if (reqPath === "/" && server.option.virtualDirectory) {
+            Object.keys(server.option.virtualDirectory).forEach((virtualPath) => {
+                const DResponse = createDResponse({
+                    server,
+                    reqPath: joinPath(virtualPath)
+                });
+                DMultistatus.appendChild(DResponse)
+            })
+        }
     }
     else {
-        const DResponse = createDResponse({ rootPath, reqPath });
+        const DResponse = createDResponse({ server, reqPath });
         DMultistatus.appendChild(DResponse);
     }
 
     return '<?xml version="1.0" encoding="utf-8" ?>' + new XMLSerializer().serializeToString(xml);
 }
 
-function createDResponsesInDirectory({ rootPath, reqPath, depth }: PropfindArgs) {
-    var files = fs.readdirSync(joinPath(rootPath, reqPath));
+function createDResponsesInDirectory({ server, reqPath, depth }: PropfindArgs) {
+    var files = fs.readdirSync(server.getFilePath(reqPath));
 
     const DResponseArr = [];
 
-    if(depth === 1){
+    if (depth === 1) {
         DResponseArr.push(createDResponse({
-            rootPath,
+            server,
             reqPath
         }));
     }
@@ -42,7 +52,7 @@ function createDResponsesInDirectory({ rootPath, reqPath, depth }: PropfindArgs)
     files.map((file) => {
         try {
             return createDResponse({
-                rootPath,
+                server,
                 reqPath: joinPath(reqPath, file)
             })
         }
@@ -67,8 +77,8 @@ function createDResponsesInDirectory({ rootPath, reqPath, depth }: PropfindArgs)
     return DResponseArr;
 }
 
-function createDResponse({ rootPath, reqPath }: Omit<PropfindArgs, "depth">) {
-    let fileStat = fs.statSync(joinPath(rootPath, reqPath));
+function createDResponse({ server, reqPath }: Omit<PropfindArgs, "depth">) {
+    let fileStat = fs.statSync(server.getFilePath(reqPath));
     const DResponseBase = createDResponseBase();
     const DResponse = DResponseBase.createElement('D:response');
 
@@ -82,10 +92,10 @@ function createDResponse({ rootPath, reqPath }: Omit<PropfindArgs, "depth">) {
     const mimeType = mime.lookup(path.basename(reqPath));
     const property: PropfindProperty = {
         creationdate: fileStat.ctime,
-        displayname: fileStat.isFile() ? path.basename(reqPath) : (reqPath.split('/').at(-2) ?? '/') ,
+        displayname: fileStat.isFile() ? path.basename(reqPath) : (reqPath.split('/').at(-2) ?? '/'),
         getcontentlength: fileStat.size,
         getcontenttype: mimeType || undefined,
-        getetag: fileStat.ino.toString(),
+        getetag: getEtag(fileStat),
         getlastmodified: fileStat.mtime,
         resourcetype: fileStat.isDirectory() ? 'collection' : undefined
     }
@@ -173,9 +183,9 @@ function createDResponseBase() {
 
 
 interface PropfindArgs {
-    rootPath: string;
     reqPath: string;
     depth?: 0 | 1;
+    server: WebdavServer;
 }
 
 /**

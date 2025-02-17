@@ -2,7 +2,7 @@ import * as http1 from "node:http";
 import * as http2 from "node:http2";
 import * as fs from 'node:fs';
 import * as mime from 'mime-types';
-import escapeRegexp, { setHeader, joinPath, writeFile, decodePath, rmDirectory } from "./func.js";
+import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, slash } from "./func.js";
 import { createPropfindXML } from "./xml/propfind.js";
 import { createDeleteXML } from "./xml/delete.js";
 
@@ -33,7 +33,7 @@ export class WebdavServer {
         },
         async get(req, res, server) {
             const reqPath = decodePath(req.url);
-            const filePath = joinPath(server.option.rootPath, reqPath);
+            const filePath = server.getFilePath(reqPath);
 
             if (!fs.existsSync(filePath)) {
                 res.statusCode = 404;
@@ -113,7 +113,7 @@ export class WebdavServer {
         },
         async head(req, res, server) {
             const reqPath = decodePath(req.url);
-            const filePath = joinPath(server.option.rootPath, reqPath);
+            const filePath = server.getFilePath(reqPath);
 
             if (!fs.existsSync(filePath)) {
                 res.statusCode = 404;
@@ -151,7 +151,7 @@ export class WebdavServer {
         },
         async put(req, res, server) {
             const reqPath = decodePath(req.url);
-            const filePath = joinPath(server.option.rootPath, reqPath);
+            const filePath = server.getFilePath(reqPath);
 
             const alreadyExists = fs.existsSync(filePath);
             await writeFile(req, filePath);
@@ -171,7 +171,7 @@ export class WebdavServer {
             }
 
             const reqPath = decodePath(req.url);
-            const filePath = joinPath(server.option.rootPath, reqPath);
+            const filePath = server.getFilePath(reqPath);
             const alreadyExists = fs.existsSync(filePath);
             await writeFile(req, filePath);
             if (alreadyExists) {
@@ -189,7 +189,7 @@ export class WebdavServer {
          */
         async propfind(req, res, server) {
             const reqPath = decodePath(req.url);
-            const filePath = joinPath(server.option.rootPath, reqPath);
+            const filePath = server.getFilePath(reqPath);
 
             const depth = Number(req.headers.depth) as (0 | 1) ?? 0;
 
@@ -208,9 +208,9 @@ export class WebdavServer {
                     'dav': '1'
                 })
                 const responseXML = createPropfindXML({
-                    rootPath: server.option.rootPath,
                     reqPath,
-                    depth
+                    depth,
+                    server
                 });
                 return res.end(responseXML);
             }
@@ -225,20 +225,29 @@ export class WebdavServer {
                 return res.end();
             }
         },
-        async delete(req, res, server){
+        async delete(req, res, server) {
             const reqPath = decodePath(req.url);
-            const filePath = joinPath(server.option.rootPath, reqPath);
+            const filePath = server.getFilePath(reqPath);
 
-            if(!fs.existsSync(filePath)){
+            if (!fs.existsSync(filePath)) {
                 res.statusCode = 404;
                 return res.end();
             }
 
             const fileStat = fs.statSync(filePath);
 
-            if(fileStat.isDirectory()){
-                const basePath = joinPath(server.option.rootPath);
-                const removedPaths = rmDirectory(filePath).map(p => p.replace(new RegExp(`^${escapeRegexp(basePath)}(.*)`), '$1'));
+            if (fileStat.isDirectory()) {
+                const basePath = slash(server.option.rootPath);
+                const removedPaths = rmDirectory(filePath).map(p => {
+                    if(server.option.virtualDirectory){
+                        for(const [virtualPath, realPath] of Object.entries(server.option.virtualDirectory)){
+                            if(p.startsWith(realPath)){
+                                return joinPath(virtualPath, p.replace(new RegExp(`^${realPath}(.*)`), '$1'));
+                            }
+                        }
+                    }
+                    return p.replace(new RegExp(`^${escapeRegexp(basePath)}(.*)`), '$1');
+                });
                 const responseXML = createDeleteXML(removedPaths);
                 res.statusCode = 207;
                 setHeader(res, {
@@ -246,11 +255,17 @@ export class WebdavServer {
                 })
                 return res.end(responseXML);
             }
-            else{
+            else {
                 fs.rmSync(filePath);
                 res.statusCode = 204;
                 return res.end();
             }
+        },
+        async move(req, res, server) {
+            const reqPath = decodePath(req.url);
+            const filePath = server.getFilePath(reqPath);
+
+
         }
     }
 
@@ -263,7 +278,8 @@ export class WebdavServer {
             version: option?.version ?? 'http2',
             port: option?.port ?? 3000,
             middlewares: option?.middlewares,
-            rootPath: option?.rootPath ?? 'files'
+            rootPath: option?.rootPath ?? 'files',
+            virtualDirectory: option?.virtualDirectory
         }
 
         this.httpServer = getHttp(this.option.version).createServer(async (req, res) => {
@@ -287,6 +303,17 @@ export class WebdavServer {
         });
     }
 
+    getFilePath(reqPath: string){
+        if(this.option.virtualDirectory){
+            for(const [virtualPath, realPath] of Object.entries(this.option.virtualDirectory)){
+                if(reqPath.startsWith(virtualPath)){
+                    return joinPath(realPath, reqPath.replace(new RegExp(`^${virtualPath}(.*)`), '$1'));
+                }
+            }
+        }
+        return joinPath(this.option.rootPath, reqPath);
+    }
+
     listen() {
         this.httpServer.listen(this.option.port)
     }
@@ -299,4 +326,5 @@ interface WebdavServerOption {
     port: number;
     middlewares?: RequestHandler[];
     rootPath: string;
+    virtualDirectory?: Record<string, string>;
 }

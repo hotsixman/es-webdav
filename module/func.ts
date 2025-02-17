@@ -143,7 +143,14 @@ export function rmDirectory(path: string) {
     return paths;
 }
 
-export default function escapeRegexp(string: string) {
+/**
+ * ```js
+ * Regexp.escape
+ * ```
+ * @param string 
+ * @returns 
+ */
+export function escapeRegexp(string: string) {
     if (typeof string !== 'string') {
         throw new TypeError('Expected a string');
     }
@@ -151,4 +158,13 @@ export default function escapeRegexp(string: string) {
     return string
         .replace(/[|\\{}()[\]^$+*?.]/g, '\\$&')
         .replace(/-/g, '\\x2d');
+}
+
+/**
+ * Etag 반환
+ * @param fileStat 
+ * @returns 
+ */
+export function getEtag(fileStat: fs.Stats){
+    return `${fileStat.ino}|${fileStat.ctimeMs}|${fileStat.mtimeMs}`;
 }
