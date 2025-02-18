@@ -2,7 +2,7 @@
     "type": "module",
     "devDependencies": {
         "@types/mime-types": "^2.1.4",
-        "@types/node": "^22.13.1",
+        "@types/node": "^22.13.4",
         "@types/xmldom": "^0.1.34",
         "webdav": "^5.7.1"
     },
