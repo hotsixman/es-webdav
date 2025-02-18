@@ -5,10 +5,6 @@ import * as mime from 'mime-types';
 import { decodePath, encodePath, getEtag, joinPath } from "../func.js";
 import { WebdavServer } from "../webdav-server.js";
 
-/**
- * @todo depth 구현
- * @param param0 
- */
 export function createPropfindXML({ server, reqPath, depth }: PropfindArgs) {
     depth = depth ?? 0;
     const stat = fs.statSync(server.getFilePath(reqPath));
@@ -111,6 +107,7 @@ function createDResponse({ server, reqPath }: Omit<PropfindArgs, "depth">) {
 
 /**
  * `PropfindProperty`가 수정되면 해당 프로퍼티 추가
+ * `getcontenttype`, `supportedlock` 추가
  * @param param0 
  * @returns 
  */
