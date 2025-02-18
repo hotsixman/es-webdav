@@ -18,7 +18,7 @@ function getHttp(version: 'http' | 'http2') {
 export class WebdavServer {
     // static
     /**
-     * @todo PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK
+     * @todo PROPPATCH, MKCOL, COPY, LOCK, UNLOCK
      */
     static methodHandler: Record<string, RequestHandler> = {
         option(_, res) {
@@ -264,8 +264,48 @@ export class WebdavServer {
         async move(req, res, server) {
             const reqPath = decodePath(req.url);
             const filePath = server.getFilePath(reqPath);
+            
+            if(!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()){
+                res.statusCode = 404;
+                return res.end();
+            }
 
+            const destinationHeader = req.headers.destination;
+            if(!destinationHeader || typeof(destinationHeader) !== "string"){
+                res.statusCode = 400;
+                return res.end();
+            }
+            
+            const destinationPath = server.getFilePath(decodePath(new URL(destinationHeader).pathname));
+            const destinationAlreadyExists = fs.existsSync(destinationPath);
 
+            /**
+             * Override 검사
+             */
+            if(typeof(req.headers.override) === "string" && req.headers.override.toUpperCase() === "F"){
+                if(destinationAlreadyExists){
+                    res.statusCode = 409; //conflict
+                    return res.end();
+                }
+            }
+
+            const originStream = fs.createReadStream(filePath);
+            const destinationStream = fs.createWriteStream(destinationPath);
+            await new Promise<void>((res, rej) => {
+                originStream.on('end', res);
+                originStream.on('error', rej);
+                originStream.pipe(destinationStream);
+            });
+            fs.rmSync(filePath);
+
+            if(destinationAlreadyExists){
+                res.statusCode = 204;
+            }
+            else{
+                res.statusCode = 201;
+            }
+
+            return res.end();
         }
     }
 
