@@ -18,7 +18,7 @@ function getHttp(version: 'http' | 'http2') {
 export class WebdavServer {
     // static
     /**
-     * @todo PROPPATCH, MKCOL, COPY, LOCK, UNLOCK
+     * @todo PROPPATCH, LOCK, UNLOCK
      */
     static methodHandler: Record<string, RequestHandler> = {
         option(_, res) {
@@ -328,6 +328,51 @@ export class WebdavServer {
             }
 
             res.statusCode = 201;
+            return res.end();
+        },
+        async copy(req, res, server){
+            const reqPath = req.url;
+            const originPath = server.getSourcePath(reqPath);
+            
+            if(!fs.existsSync(originPath) || fs.statSync(originPath).isDirectory()){
+                res.statusCode = 404;
+                return res.end();
+            }
+
+            const destinationHeader = req.headers.destination;
+            if(!destinationHeader || typeof(destinationHeader) !== "string"){
+                res.statusCode = 400;
+                return res.end();
+            }
+            
+            const destinationPath = server.getSourcePath(decodePath(new URL(destinationHeader).pathname));
+            const destinationAlreadyExists = fs.existsSync(destinationPath);
+
+            /**
+             * Override 검사
+             */
+            if(typeof(req.headers.override) === "string" && req.headers.override.toUpperCase() === "F"){
+                if(destinationAlreadyExists){
+                    res.statusCode = 409; //conflict
+                    return res.end();
+                }
+            }
+
+            const originStream = fs.createReadStream(originPath);
+            const destinationStream = fs.createWriteStream(destinationPath);
+            await new Promise<void>((res, rej) => {
+                originStream.on('end', res);
+                originStream.on('error', rej);
+                originStream.pipe(destinationStream);
+            });
+
+            if(destinationAlreadyExists){
+                res.statusCode = 204;
+            }
+            else{
+                res.statusCode = 201;
+            }
+
             return res.end();
         }
     }
