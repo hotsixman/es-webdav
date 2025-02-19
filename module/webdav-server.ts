@@ -191,7 +191,7 @@ export class WebdavServer {
             const reqPath = decodePath(req.url);
             const filePath = server.getFilePath(reqPath);
 
-            const depth = Number(req.headers.depth) as (0 | 1) ?? 0;
+            let depth = (Number(req.headers.depth) || 0) as (0 | 1);
 
             /**
              * 경로에 아무것도 존재하지 않는 경우
@@ -306,6 +306,29 @@ export class WebdavServer {
             }
 
             return res.end();
+        },
+        async mkcol(req, res, server){
+            const reqPath = req.url;
+            const sourcePath = server.getSourcePath(reqPath);
+
+            if(fs.existsSync(sourcePath)){
+                res.statusCode = 405;
+                return res.end();
+            }
+
+            try{
+                fs.mkdirSync(sourcePath);
+            }
+            catch(err){
+                if((err as any)?.code === "ENOENT"){
+                    res.statusCode = 409;
+                    return res.end();
+                }
+                throw err;
+            }
+
+            res.statusCode = 201;
+            return res.end();
         }
     }
 
@@ -343,7 +366,7 @@ export class WebdavServer {
         });
     }
 
-    getFilePath(reqPath: string){
+    getSourcePath(reqPath: string){
         if(this.option.virtualDirectory){
             for(const [virtualPath, realPath] of Object.entries(this.option.virtualDirectory)){
                 if(reqPath.startsWith(virtualPath)){
@@ -351,8 +374,9 @@ export class WebdavServer {
                 }
             }
         }
-        return joinPath(this.option.rootPath, reqPath);
+        return joinPath(this.option.rootPath, reqPath).split('/').map(decodePath).join('/');
     }
+    getFilePath = this.getSourcePath;
 
     listen() {
         this.httpServer.listen(this.option.port)

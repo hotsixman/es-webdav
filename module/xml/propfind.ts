@@ -38,37 +38,37 @@ function createDResponsesInDirectory({ server, reqPath, depth }: PropfindArgs) {
 
     const DResponseArr = [];
 
+    DResponseArr.push(createDResponse({
+        server,
+        reqPath
+    }));
+
     if (depth === 1) {
-        DResponseArr.push(createDResponse({
-            server,
-            reqPath
-        }));
+        files.map((file) => {
+            try {
+                return createDResponse({
+                    server,
+                    reqPath: joinPath(reqPath, file)
+                })
+            }
+            catch {
+                const DResponseBase = createDResponseBase();
+                const DResponse = DResponseBase.createElement('D:response');
+
+                const DHref = DResponseBase.createElement('D:href');
+                DHref.textContent = encodePath(joinPath(reqPath, file));
+
+                const DPropstat = DResponseBase.createElement('D:propstat');
+                const DStatus = DResponseBase.createElement('D:status');
+                DStatus.textContent = 'HTTP/1.1 404 Not Found';
+
+                DResponse.appendChild(DHref);
+                DResponse.appendChild(DPropstat);
+                DPropstat.appendChild(DStatus);
+                return DResponse;
+            }
+        }).forEach(e => DResponseArr.push(e));
     }
-
-    files.map((file) => {
-        try {
-            return createDResponse({
-                server,
-                reqPath: joinPath(reqPath, file)
-            })
-        }
-        catch {
-            const DResponseBase = createDResponseBase();
-            const DResponse = DResponseBase.createElement('D:response');
-
-            const DHref = DResponseBase.createElement('D:href');
-            DHref.textContent = encodePath(joinPath(reqPath, file));
-
-            const DPropstat = DResponseBase.createElement('D:propstat');
-            const DStatus = DResponseBase.createElement('D:status');
-            DStatus.textContent = 'HTTP/1.1 404 Not Found';
-
-            DResponse.appendChild(DHref);
-            DResponse.appendChild(DPropstat);
-            DPropstat.appendChild(DStatus);
-            return DResponse;
-        }
-    }).forEach(e => DResponseArr.push(e));
 
     return DResponseArr;
 }
