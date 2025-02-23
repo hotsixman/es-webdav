@@ -34,45 +34,6 @@ export function slash(path: string) {
 }
 
 /**
- * `GET`이나 `HEAD` 메소드에서 사용하는 헤더 생성
- * 1. fileStat, contentType, filePath를 반환. 만약 파일이 없거나 디렉토리인경우 응답 코드를 404를 설정하고 done.
- * 2. 응답 코드를 200으로 설정하고 적절한 헤더를 설정.
- */
-export function* GETHEADHeaderGenerator(req: Http2ServerRequest, res: Http2ServerResponse, server: WebdavServer) {
-    const reqPath = req.url;
-    const filePath = joinPath(server.option.rootPath, reqPath);
-
-    if (!fs.existsSync(filePath)) {
-        res.statusCode = 404;
-        res.write('Not found.');
-        return res.end();
-    }
-
-    const fileStat = fs.statSync(filePath);
-
-    /**
-     * 해당 경로가 디렉토리인 경우
-     */
-    if (fileStat.isDirectory()) {
-        res.statusCode = 404;
-        res.write('Not found.');
-        return res.end();
-    }
-
-    const contentType = mime.lookup(filePath);
-
-    yield { fileStat, contentType, filePath };
-
-    res.statusCode = 200;
-    setHeader(res, {
-        'content-type': contentType || undefined,
-        'content-length': fileStat.size
-    });
-
-    return;
-}
-
-/**
  * 요청으로 넘어오는 데이터를 파일에 작성
  */
 export async function writeFile(req: Http2ServerRequest, filePath: string) {
@@ -166,5 +127,5 @@ export function escapeRegexp(string: string) {
  * @returns 
  */
 export function getEtag(fileStat: fs.Stats){
-    return `${fileStat.ino}|${fileStat.ctimeMs}|${fileStat.mtimeMs}`;
+    return `${fileStat.ino}-${fileStat.ctimeMs}-${fileStat.mtimeMs}`;
 }

@@ -18,7 +18,7 @@ function getHttp(version: 'http' | 'http2') {
 export class WebdavServer {
     // static
     /**
-     * @todo PROPPATCH, LOCK, UNLOCK
+     * @todo (PROPPATCH), LOCK, UNLOCK
      */
     static methodHandler: Record<string, RequestHandler> = {
         option(_, res) {
@@ -386,7 +386,7 @@ export class WebdavServer {
             version: option?.version ?? 'http2',
             port: option?.port ?? 3000,
             middlewares: option?.middlewares,
-            rootPath: option?.rootPath ?? 'files',
+            rootPath: option?.rootPath ?? '.',
             virtualDirectory: option?.virtualDirectory
         }
 
