@@ -38,7 +38,11 @@ export function resolvePath(...args: string[]) {
  * @returns 
  */
 export function getParentPath(pathname: string): string{
-    return slash(path.dirname(pathname))
+    let dirname = path.dirname(pathname);
+    if(dirname.endsWith('/')){
+        dirname = dirname.slice(0, -1)
+    }
+    return slash(dirname)
 }
 /**
  * `\`를 사용하는 경로를 `/`로 변경 
@@ -53,10 +57,6 @@ export function slash(path: string) {
  * 요청으로 넘어오는 데이터를 파일에 작성
  */
 export async function writeFile(req: Http2ServerRequest, filePath: string) {
-    const folderPath = path.dirname(filePath);
-    if (!fs.existsSync(folderPath)) {
-        fs.mkdirSync(folderPath, { recursive: true });
-    }
     const writeStream = fs.createWriteStream(filePath);
     try {
         await new Promise<void>((resolve, reject) => {

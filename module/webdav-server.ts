@@ -6,6 +6,7 @@ import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, 
 import { createPropfindXML } from "./xml/propfind.js";
 import { createDeleteXML } from "./xml/delete.js";
 import { ResourceLockInterface, ResourceLockManager } from "./resource-lock-manager.js";
+import { normalize } from "node:path";
 
 function getHttp(version: 'http' | 'http2') {
     if (version === "http") {
@@ -156,30 +157,40 @@ export class WebdavServer {
 
             // override 검사
             const { overwrite } = req.headers;
-            if (typeof(overwrite) === "string" && (overwrite as string).toUpperCase() === "F") {
+            if (typeof (overwrite) === "string" && (overwrite as string).toUpperCase() === "F") {
                 res.statusCode = 412;
                 return res.end();
             }
 
             // 잠금 검사
             const lockToken = req.headers['lock-token'];
-            if(server.lockManager.isLocked(filePath)){
-                if(lockToken !== server.lockManager.getLockToken(filePath)){
+            if (server.lockManager.isLocked(server.getServicePath(filePath))) {
+                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(filePath))) {
+                    res.statusCode = 423;
+                    return res.end();
+                }
+            }
+            // 부모 폴더 잠금 검사
+            const parentPath = getParentPath(filePath)
+            if (server.lockManager.isLocked(server.getServicePath(parentPath))) {
+                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(parentPath))) {
                     res.statusCode = 423;
                     return res.end();
                 }
             }
 
             const alreadyExists = fs.existsSync(filePath);
-            if(!alreadyExists){
-                // 파일이 없는 경우 부모 폴더에 대해서도 잠금 검사
-                const parentPath = getParentPath(filePath);
-                if(server.lockManager.isLocked(parentPath)){
-                    if(lockToken !== server.lockManager.getLockToken(parentPath)){
-                        res.statusCode = 423;
-                        return res.end();
-                    }
+            if (!alreadyExists) {
+                // 파일이 없는 경우 부모 폴더가 없으면 404
+                if (!fs.existsSync(getParentPath(filePath))) {
+                    res.statusCode = 404;
+                    return res.end();
                 }
+            }
+            // 만약 경로에 폴더가 존재하는 경우 405 응답
+            if (alreadyExists && fs.statSync(filePath).isDirectory()) {
+                res.statusCode = 405;
+                return res.end();
             }
 
             await writeFile(req, filePath);
@@ -247,14 +258,14 @@ export class WebdavServer {
             삭제하려면 해당 리소스와 상위 폴더가 모두 잠겨있지 않아야함
             */
             const lockToken = req.headers['lock-token'];
-            if(server.lockManager.isLocked(filePath)){
-                if(lockToken !== server.lockManager.getLockToken(filePath)){
+            if (server.lockManager.isLocked(server.getServicePath(filePath))) {
+                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(filePath))) {
                     res.statusCode = 423;
                     return res.end();
                 }
             }
-            if(server.lockManager.isLocked(getParentPath(filePath))){
-                if(lockToken !== server.lockManager.getLockToken(getParentPath(filePath))){
+            if (server.lockManager.isLocked(server.getServicePath(getParentPath(filePath)))) {
+                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(getParentPath(filePath)))) {
                     res.statusCode = 423;
                     return res.end();
                 }
@@ -321,19 +332,61 @@ export class WebdavServer {
             // 목적지 경로
             const destinationPath = server.getFilePath(decodePath(new URL(destinationHeader).pathname));
             const destinationAlreadyExists = fs.existsSync(destinationPath);
-            console.log(destinationPath)
+            const destinationParentPath = getParentPath(destinationPath)
 
             // 소스가 폴더이고 목적지 경로가 이미 존재하는 경우
-            if(sourceStat.isDirectory() && destinationAlreadyExists){
+            if (sourceStat.isDirectory() && destinationAlreadyExists) {
+                res.statusCode = 405;
+                return res.end();
+            }
+            // 만약 목적지 경로에 폴더가 존재하는 경우 405 응답
+            if (destinationAlreadyExists && fs.statSync(destinationPath).isDirectory()) {
                 res.statusCode = 405;
                 return res.end();
             }
 
             /*
             잠금 검사
-            
             1. 목적지에 이미 파일이 존재하는 경우
+                - 소스가 잠겨있지 않아야 함
+                - 목적지 파일이 잠겨있지 않아야 함
+                - 목적지 파일의 부모 폴더가 잠겨있지 않아야 함
+            2. 목적지에 아무것도 없는 경우
+                - 소스가 잠겨있지 않아야 함
+                - 목적지의 부모 폴더가 존재해야 함
+                - 목적지의 부모 폴더가 잠겨있지 않아야 함
             */
+            const lockToken = req.headers['lock-token'];
+            // 소스 잠금
+            if (server.lockManager.isLocked(server.getServicePath(filePath))) {
+                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(filePath))) {
+                    res.statusCode = 423;
+                    return res.end();
+                }
+            }
+            // 목적지 부모 폴더 잠금
+            if (server.lockManager.isLocked(server.getServicePath(destinationParentPath))) {
+                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(destinationParentPath))) {
+                    res.statusCode = 423;
+                    return res.end();
+                }
+            }
+            if (destinationAlreadyExists) {
+                // 목적지 파일 잠금
+                if (server.lockManager.isLocked(server.getServicePath(destinationPath))) {
+                    if (lockToken !== server.lockManager.getLockToken(server.getServicePath(destinationPath))) {
+                        res.statusCode = 423;
+                        return res.end();
+                    }
+                }
+            }
+            else {
+                // 부모 폴더 존재 여부
+                if (fs.existsSync(destinationParentPath)) {
+                    res.statusCode = 404;
+                    return res.end();
+                }
+            }
 
             /**
              * Override 검사
@@ -345,12 +398,11 @@ export class WebdavServer {
                 }
             }
 
-            const destinationParentPath = getParentPath(destinationPath)
-            if(!fs.existsSync(destinationParentPath)){
-                fs.mkdirSync(destinationParentPath, {recursive: true});
-            }
+            /*
+            대상 경로의 부모 폴더가 없을 시 잠금 검사하고 생성
+            */
             fs.renameSync(filePath, destinationPath);
-
+            ``
             return res.end();
         },
         async mkcol(req, res, server) {
@@ -359,6 +411,12 @@ export class WebdavServer {
 
             if (fs.existsSync(sourcePath)) {
                 res.statusCode = 405;
+                return res.end();
+            }
+
+            // 부모 폴더가 존재하는지 검사
+            if (!fs.existsSync(getParentPath(reqPath))) {
+                res.statusCode = 404;
                 return res.end();
             }
 
@@ -455,19 +513,26 @@ export class WebdavServer {
         }
 
         this.httpServer = getHttp(this.option.version).createServer(async (req, res) => {
-            if (this.option.middlewares) {
-                for (const middleware of this.option.middlewares) {
-                    await middleware(req, res, this);
-                    if (res.writableEnded) {
-                        return;
+            try {
+                if (this.option.middlewares) {
+                    for (const middleware of this.option.middlewares) {
+                        await middleware(req, res, this);
+                        if (res.writableEnded) {
+                            return;
+                        }
+                    }
+                }
+
+                for (const [method, handler] of Object.entries(WebdavServer.methodHandler)) {
+                    if (req.method.toUpperCase() === method.toUpperCase()) {
+                        return await handler(req, res, this);
                     }
                 }
             }
-
-            for (const [method, handler] of Object.entries(WebdavServer.methodHandler)) {
-                if (req.method.toUpperCase() === method.toUpperCase()) {
-                    return await handler(req, res, this);
-                }
+            catch (err) {
+                console.log(err);
+                res.statusCode = 500;
+                return res.end();
             }
 
             res.statusCode = 400;
@@ -492,10 +557,10 @@ export class WebdavServer {
                 }
             }
         }
-        if(!sourcePath){
+        if (!sourcePath) {
             sourcePath = joinPath(this.option.rootPath, reqPath);
         }
-        if(sourcePath.endsWith('/')){
+        if (sourcePath.endsWith('/')) {
             sourcePath = sourcePath.slice(0, -1);
         }
         return sourcePath;
