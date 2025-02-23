@@ -165,7 +165,7 @@ export function isChildPath(parentPath:string, childPath: string): boolean {
 
 export function getReqPath(req: Http2ServerRequest){
     let reqPath = decodePath(req.url);
-    if(reqPath.endsWith('/')){
+    if(reqPath !=="/" && reqPath.endsWith('/')){
         reqPath = reqPath.slice(0, -1)
     }
     return reqPath;
