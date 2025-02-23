@@ -25,6 +25,22 @@ export function joinPath(...args: string[]) {
     return slash(path.join(...args));
 }
 /**
+ * path를 resolve함. 윈도우 환경에서 `/`가 `\`로 되는 문제가 있어 slash 사용.
+ * @param args 
+ * @returns 
+ */
+export function resolvePath(...args: string[]) {
+    return slash(path.resolve(...args));
+}
+/**
+ * 부모 경로를 가져옴. slash 사용.
+ * @param pathname 
+ * @returns 
+ */
+export function getParentPath(pathname: string): string{
+    return slash(path.dirname(pathname))
+}
+/**
  * `\`를 사용하는 경로를 `/`로 변경 
  * @param path 
  * @returns 
@@ -81,7 +97,7 @@ export async function asyncPipe(value: any, funcArr: ((arg: any) => any | Promis
 
 /**
  * 폴더와 하위 폴더 모두 삭제
- * 삭제 후 삭제 한 파일 및 폴더 전체 경로 배열 반환
+ * 삭제 후 삭제 한 파일 및 폴더 전체의 경로 배열 반환(절대경로, 디코딩됨)
  * @param path 
  * @returns 
  */
@@ -128,4 +144,29 @@ export function escapeRegexp(string: string) {
  */
 export function getEtag(fileStat: fs.Stats){
     return `${fileStat.ino}-${fileStat.ctimeMs}-${fileStat.mtimeMs}`;
+}
+
+/**
+ * `childPath` 가 `parentPath` 의 자손 경로인지 확인
+ * @param parentPath 
+ * @param childPath 
+ * @returns 
+ */
+export function isChildPath(parentPath:string, childPath: string): boolean {
+    if(!parentPath.endsWith('/')){
+        parentPath += "/"
+    }
+    if(!childPath.endsWith('/')){
+        childPath += '/'
+    }
+
+    return childPath.startsWith(parentPath)
+}
+
+export function getReqPath(req: Http2ServerRequest){
+    let reqPath = decodePath(req.url);
+    if(reqPath.endsWith('/')){
+        reqPath = reqPath.slice(0, -1)
+    }
+    return reqPath;
 }

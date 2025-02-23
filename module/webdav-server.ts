@@ -2,10 +2,10 @@ import * as http1 from "node:http";
 import * as http2 from "node:http2";
 import * as fs from 'node:fs';
 import * as mime from 'mime-types';
-import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, slash, encodePath } from "./func.js";
+import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, slash, encodePath, resolvePath, getParentPath, isChildPath, getReqPath } from "./func.js";
 import { createPropfindXML } from "./xml/propfind.js";
 import { createDeleteXML } from "./xml/delete.js";
-import path from "node:path";
+import { ResourceLockInterface, ResourceLockManager } from "./resource-lock-manager.js";
 
 function getHttp(version: 'http' | 'http2') {
     if (version === "http") {
@@ -33,7 +33,7 @@ export class WebdavServer {
             return;
         },
         async get(req, res, server) {
-            const reqPath = decodePath(req.url);
+            const reqPath = getReqPath(req);
             const filePath = server.getFilePath(reqPath);
 
             if (!fs.existsSync(filePath)) {
@@ -113,7 +113,7 @@ export class WebdavServer {
             }
         },
         async head(req, res, server) {
-            const reqPath = decodePath(req.url);
+            const reqPath = getReqPath(req);
             const filePath = server.getFilePath(reqPath);
 
             if (!fs.existsSync(filePath)) {
@@ -151,29 +151,37 @@ export class WebdavServer {
             return res.end();
         },
         async put(req, res, server) {
-            const reqPath = decodePath(req.url);
+            const reqPath = getReqPath(req);
             const filePath = server.getFilePath(reqPath);
 
-            const alreadyExists = fs.existsSync(filePath);
-            await writeFile(req, filePath);
-            if (alreadyExists) {
-                res.statusCode = 200;
-            }
-            else {
-                res.statusCode = 201;
-            }
-            return res.end();
-        },
-        async overwrite(req, res, server) {
+            // override 검사
             const { overwrite } = req.headers;
-            if (!overwrite || (overwrite as string).toUpperCase() !== "T") {
+            if (typeof(overwrite) === "string" && (overwrite as string).toUpperCase() === "F") {
                 res.statusCode = 412;
                 return res.end();
             }
 
-            const reqPath = decodePath(req.url);
-            const filePath = server.getFilePath(reqPath);
+            // 잠금 검사
+            const lockToken = req.headers['lock-token'];
+            if(server.lockManager.isLocked(filePath)){
+                if(lockToken !== server.lockManager.getLockToken(filePath)){
+                    res.statusCode = 423;
+                    return res.end();
+                }
+            }
+
             const alreadyExists = fs.existsSync(filePath);
+            if(!alreadyExists){
+                // 파일이 없는 경우 부모 폴더에 대해서도 잠금 검사
+                const parentPath = getParentPath(filePath);
+                if(server.lockManager.isLocked(parentPath)){
+                    if(lockToken !== server.lockManager.getLockToken(parentPath)){
+                        res.statusCode = 423;
+                        return res.end();
+                    }
+                }
+            }
+
             await writeFile(req, filePath);
             if (alreadyExists) {
                 res.statusCode = 200;
@@ -185,11 +193,10 @@ export class WebdavServer {
         },
         /**
          * @todo 
-         * - `depth` 구현
          * - `D:prop`에 사용할 `property` 추가
          */
         async propfind(req, res, server) {
-            const reqPath = decodePath(req.url);
+            const reqPath = getReqPath(req);
             const filePath = server.getFilePath(reqPath);
 
             let depth = (Number(req.headers.depth) || 0) as (0 | 1);
@@ -227,7 +234,7 @@ export class WebdavServer {
             }
         },
         async delete(req, res, server) {
-            const reqPath = decodePath(req.url);
+            const reqPath = getReqPath(req);
             const filePath = server.getFilePath(reqPath);
 
             if (!fs.existsSync(filePath)) {
@@ -235,14 +242,36 @@ export class WebdavServer {
                 return res.end();
             }
 
+            /*
+            잠금 검사
+            삭제하려면 해당 리소스와 상위 폴더가 모두 잠겨있지 않아야함
+            */
+            const lockToken = req.headers['lock-token'];
+            if(server.lockManager.isLocked(filePath)){
+                if(lockToken !== server.lockManager.getLockToken(filePath)){
+                    res.statusCode = 423;
+                    return res.end();
+                }
+            }
+            if(server.lockManager.isLocked(getParentPath(filePath))){
+                if(lockToken !== server.lockManager.getLockToken(getParentPath(filePath))){
+                    res.statusCode = 423;
+                    return res.end();
+                }
+            }
+
             const fileStat = fs.statSync(filePath);
 
             if (fileStat.isDirectory()) {
+                /*
+                폴더를 삭제하는 경우
+                해당 폴더와 모든 하위 리소스의 경로를 XML로 만들어 응답
+                */
                 const basePath = slash(server.option.rootPath);
                 const removedPaths = rmDirectory(filePath).map(p => {
                     if (server.option.virtualDirectory) {
                         for (const [virtualPath, realPath] of Object.entries(server.option.virtualDirectory)) {
-                            if (p.startsWith(realPath)) {
+                            if (isChildPath(realPath, p)) {
                                 return joinPath(virtualPath, p.replace(new RegExp(`^${realPath}(.*)`), '$1'));
                             }
                         }
@@ -257,28 +286,54 @@ export class WebdavServer {
                 return res.end(responseXML);
             }
             else {
+                /*
+                파일을 삭제해는 경우
+                해당 파일만 삭제하고 204 응답
+                */
                 fs.rmSync(filePath);
                 res.statusCode = 204;
                 return res.end();
             }
         },
         async move(req, res, server) {
-            const reqPath = decodePath(req.url);
+            const reqPath = getReqPath(req);
             const filePath = server.getFilePath(reqPath);
 
-            if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+            const sourceStat = fs.statSync(filePath);
+
+            /*
+            소스 경로가 존재하는 지 확인
+            */
+            if (!fs.existsSync(filePath)) {
                 res.statusCode = 404;
                 return res.end();
             }
 
+            /*
+            목적지 헤더가 존재하는지 확인
+            */
             const destinationHeader = req.headers.destination;
             if (!destinationHeader || typeof (destinationHeader) !== "string") {
                 res.statusCode = 400;
                 return res.end();
             }
 
+            // 목적지 경로
             const destinationPath = server.getFilePath(decodePath(new URL(destinationHeader).pathname));
             const destinationAlreadyExists = fs.existsSync(destinationPath);
+            console.log(destinationPath)
+
+            // 소스가 폴더이고 목적지 경로가 이미 존재하는 경우
+            if(sourceStat.isDirectory() && destinationAlreadyExists){
+                res.statusCode = 405;
+                return res.end();
+            }
+
+            /*
+            잠금 검사
+            
+            1. 목적지에 이미 파일이 존재하는 경우
+            */
 
             /**
              * Override 검사
@@ -290,26 +345,16 @@ export class WebdavServer {
                 }
             }
 
-            const originStream = fs.createReadStream(filePath);
-            const destinationStream = fs.createWriteStream(destinationPath);
-            await new Promise<void>((res, rej) => {
-                originStream.on('end', res);
-                originStream.on('error', rej);
-                originStream.pipe(destinationStream);
-            });
-            fs.rmSync(filePath);
-
-            if (destinationAlreadyExists) {
-                res.statusCode = 204;
+            const destinationParentPath = getParentPath(destinationPath)
+            if(!fs.existsSync(destinationParentPath)){
+                fs.mkdirSync(destinationParentPath, {recursive: true});
             }
-            else {
-                res.statusCode = 201;
-            }
+            fs.renameSync(filePath, destinationPath);
 
             return res.end();
         },
         async mkcol(req, res, server) {
-            const reqPath = req.url;
+            const reqPath = getReqPath(req);
             const sourcePath = server.getSourcePath(reqPath);
 
             if (fs.existsSync(sourcePath)) {
@@ -332,7 +377,7 @@ export class WebdavServer {
             return res.end();
         },
         async copy(req, res, server) {
-            const reqPath = req.url;
+            const reqPath = getReqPath(req);
             const originPath = server.getSourcePath(reqPath);
 
             if (!fs.existsSync(originPath) || fs.statSync(originPath).isDirectory()) {
@@ -381,13 +426,14 @@ export class WebdavServer {
     // props
     httpServer: http1.Server | http2.Http2Server;
     option: WebdavServerOption;
+    lockManager: ResourceLockInterface = new ResourceLockManager();
 
     constructor(option?: Partial<WebdavServerOption>) {
         this.option = {
             version: option?.version ?? 'http2',
             port: option?.port ?? 3000,
             middlewares: option?.middlewares,
-            rootPath: slash(path.resolve(process.cwd(), option?.rootPath ?? '.')),
+            rootPath: resolvePath(process.cwd(), option?.rootPath ?? '.'),
         }
         if (!this.option.rootPath.endsWith('/')) {
             this.option.rootPath += '/'
@@ -396,7 +442,7 @@ export class WebdavServer {
             const vDirectoryMap: Record<string, string> = {}
             Object.entries(option?.virtualDirectory).forEach(([vPath, rPath]) => {
                 let virtualPath = vPath;
-                let realPath = slash(path.resolve(process.cwd(), rPath))
+                let realPath = resolvePath(process.cwd(), rPath);
                 if (!realPath.endsWith('/')) {
                     realPath += '/'
                 }
@@ -431,50 +477,52 @@ export class WebdavServer {
 
     /**
     서버 요청 경로를 실제 경로로 변환.
-    @param reqPath 인코딩된 경로
-    @returns 디코딩된 실제 경로
+    인자와 반환값 모두 디코딩된 경로.
     */
     getSourcePath(reqPath: string) {
-        reqPath = decodePath(reqPath);
+        let sourcePath: string = "";
         if (!reqPath.endsWith('/')) {
             reqPath += '/'
         }
 
         if (this.option.virtualDirectory) {
             for (const [virtualPath, realPath] of Object.entries(this.option.virtualDirectory)) {
-                if (reqPath.startsWith(virtualPath)) {
-                    return joinPath(realPath, reqPath.replace(new RegExp(`^${virtualPath}(.*)`), '$1'));
+                if (isChildPath(virtualPath, reqPath)) {
+                    sourcePath = joinPath(realPath, reqPath.replace(new RegExp(`^${virtualPath}(.*)`), '$1'));
                 }
             }
         }
-        return joinPath(this.option.rootPath, reqPath)
+        if(!sourcePath){
+            sourcePath = joinPath(this.option.rootPath, reqPath);
+        }
+        if(sourcePath.endsWith('/')){
+            sourcePath = sourcePath.slice(0, -1);
+        }
+        return sourcePath;
     }
     getFilePath = this.getSourcePath;
 
     /**
     실제 경로를 서버 요청 경로로 변환.
-    @param sourcePath 디코딩된 경로
-    @returns 인코딩된 실제 경로
+    인자와 반환값 모두 디코딩된 경로.
     */
-    getReqPath(sourcePath: string) {
+    getServicePath(sourcePath: string) {
         let reqPath: string = '';
 
-        if (!sourcePath.endsWith('/')) {
-            sourcePath += '/'
-        }
         if (this.option.virtualDirectory) {
             for (const [virtualPath, realPath] of Object.entries(this.option.virtualDirectory)) {
-                if (sourcePath.startsWith(realPath)) {
+                if (isChildPath(realPath, sourcePath)) {
                     reqPath = joinPath(virtualPath, sourcePath.replace(new RegExp(`^${realPath}(.*)`), '$1'));
                 }
             }
         }
         if (!reqPath) {
-            if (!sourcePath.startsWith(this.option.rootPath)) {
+            if (!isChildPath(this.option.rootPath, sourcePath)) {
                 return '';
             }
             reqPath = sourcePath.slice(this.option.rootPath.length)
         }
+
         if (!reqPath.startsWith('/')) {
             reqPath = '/' + reqPath;
         }
@@ -482,7 +530,7 @@ export class WebdavServer {
             reqPath = reqPath.slice(0, -1)
         }
 
-        return encodePath(reqPath);
+        return reqPath;
     }
 
     listen() {
