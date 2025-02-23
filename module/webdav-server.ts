@@ -2,7 +2,7 @@ import * as http1 from "node:http";
 import * as http2 from "node:http2";
 import * as fs from 'node:fs';
 import * as mime from 'mime-types';
-import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, slash } from "./func.js";
+import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, slash, encodePath } from "./func.js";
 import { createPropfindXML } from "./xml/propfind.js";
 import { createDeleteXML } from "./xml/delete.js";
 import path from "node:path";
@@ -240,9 +240,9 @@ export class WebdavServer {
             if (fileStat.isDirectory()) {
                 const basePath = slash(server.option.rootPath);
                 const removedPaths = rmDirectory(filePath).map(p => {
-                    if(server.option.virtualDirectory){
-                        for(const [virtualPath, realPath] of Object.entries(server.option.virtualDirectory)){
-                            if(p.startsWith(realPath)){
+                    if (server.option.virtualDirectory) {
+                        for (const [virtualPath, realPath] of Object.entries(server.option.virtualDirectory)) {
+                            if (p.startsWith(realPath)) {
                                 return joinPath(virtualPath, p.replace(new RegExp(`^${realPath}(.*)`), '$1'));
                             }
                         }
@@ -265,26 +265,26 @@ export class WebdavServer {
         async move(req, res, server) {
             const reqPath = decodePath(req.url);
             const filePath = server.getFilePath(reqPath);
-            
-            if(!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()){
+
+            if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
                 res.statusCode = 404;
                 return res.end();
             }
 
             const destinationHeader = req.headers.destination;
-            if(!destinationHeader || typeof(destinationHeader) !== "string"){
+            if (!destinationHeader || typeof (destinationHeader) !== "string") {
                 res.statusCode = 400;
                 return res.end();
             }
-            
+
             const destinationPath = server.getFilePath(decodePath(new URL(destinationHeader).pathname));
             const destinationAlreadyExists = fs.existsSync(destinationPath);
 
             /**
              * Override 검사
              */
-            if(typeof(req.headers.override) === "string" && req.headers.override.toUpperCase() === "F"){
-                if(destinationAlreadyExists){
+            if (typeof (req.headers.override) === "string" && req.headers.override.toUpperCase() === "F") {
+                if (destinationAlreadyExists) {
                     res.statusCode = 409; //conflict
                     return res.end();
                 }
@@ -299,29 +299,29 @@ export class WebdavServer {
             });
             fs.rmSync(filePath);
 
-            if(destinationAlreadyExists){
+            if (destinationAlreadyExists) {
                 res.statusCode = 204;
             }
-            else{
+            else {
                 res.statusCode = 201;
             }
 
             return res.end();
         },
-        async mkcol(req, res, server){
+        async mkcol(req, res, server) {
             const reqPath = req.url;
             const sourcePath = server.getSourcePath(reqPath);
 
-            if(fs.existsSync(sourcePath)){
+            if (fs.existsSync(sourcePath)) {
                 res.statusCode = 405;
                 return res.end();
             }
 
-            try{
+            try {
                 fs.mkdirSync(sourcePath);
             }
-            catch(err){
-                if((err as any)?.code === "ENOENT"){
+            catch (err) {
+                if ((err as any)?.code === "ENOENT") {
                     res.statusCode = 409;
                     return res.end();
                 }
@@ -331,29 +331,29 @@ export class WebdavServer {
             res.statusCode = 201;
             return res.end();
         },
-        async copy(req, res, server){
+        async copy(req, res, server) {
             const reqPath = req.url;
             const originPath = server.getSourcePath(reqPath);
-            
-            if(!fs.existsSync(originPath) || fs.statSync(originPath).isDirectory()){
+
+            if (!fs.existsSync(originPath) || fs.statSync(originPath).isDirectory()) {
                 res.statusCode = 404;
                 return res.end();
             }
 
             const destinationHeader = req.headers.destination;
-            if(!destinationHeader || typeof(destinationHeader) !== "string"){
+            if (!destinationHeader || typeof (destinationHeader) !== "string") {
                 res.statusCode = 400;
                 return res.end();
             }
-            
+
             const destinationPath = server.getSourcePath(decodePath(new URL(destinationHeader).pathname));
             const destinationAlreadyExists = fs.existsSync(destinationPath);
 
             /**
              * Override 검사
              */
-            if(typeof(req.headers.override) === "string" && req.headers.override.toUpperCase() === "F"){
-                if(destinationAlreadyExists){
+            if (typeof (req.headers.override) === "string" && req.headers.override.toUpperCase() === "F") {
+                if (destinationAlreadyExists) {
                     res.statusCode = 409; //conflict
                     return res.end();
                 }
@@ -367,10 +367,10 @@ export class WebdavServer {
                 originStream.pipe(destinationStream);
             });
 
-            if(destinationAlreadyExists){
+            if (destinationAlreadyExists) {
                 res.statusCode = 204;
             }
-            else{
+            else {
                 res.statusCode = 201;
             }
 
@@ -387,8 +387,25 @@ export class WebdavServer {
             version: option?.version ?? 'http2',
             port: option?.port ?? 3000,
             middlewares: option?.middlewares,
-            rootPath: option?.rootPath ?? '.',
-            virtualDirectory: option?.virtualDirectory
+            rootPath: slash(path.resolve(process.cwd(), option?.rootPath ?? '.')),
+        }
+        if (!this.option.rootPath.endsWith('/')) {
+            this.option.rootPath += '/'
+        }
+        if (option?.virtualDirectory) {
+            const vDirectoryMap: Record<string, string> = {}
+            Object.entries(option?.virtualDirectory).forEach(([vPath, rPath]) => {
+                let virtualPath = vPath;
+                let realPath = slash(path.resolve(process.cwd(), rPath))
+                if (!realPath.endsWith('/')) {
+                    realPath += '/'
+                }
+                if (!virtualPath.endsWith('/')) {
+                    virtualPath += '/'
+                }
+                vDirectoryMap[virtualPath] = realPath;
+            })
+            this.option.virtualDirectory = vDirectoryMap;
         }
 
         this.httpServer = getHttp(this.option.version).createServer(async (req, res) => {
@@ -412,17 +429,61 @@ export class WebdavServer {
         });
     }
 
-    getSourcePath(reqPath: string){
-        if(this.option.virtualDirectory){
-            for(const [virtualPath, realPath] of Object.entries(this.option.virtualDirectory)){
-                if(reqPath.startsWith(virtualPath)){
-                    return path.resolve(process.cwd(), joinPath(realPath, reqPath.replace(new RegExp(`^${virtualPath}(.*)`), '$1')));
+    /**
+    서버 요청 경로를 실제 경로로 변환.
+    @param reqPath 인코딩된 경로
+    @returns 디코딩된 실제 경로
+    */
+    getSourcePath(reqPath: string) {
+        reqPath = decodePath(reqPath);
+        if (!reqPath.endsWith('/')) {
+            reqPath += '/'
+        }
+
+        if (this.option.virtualDirectory) {
+            for (const [virtualPath, realPath] of Object.entries(this.option.virtualDirectory)) {
+                if (reqPath.startsWith(virtualPath)) {
+                    return joinPath(realPath, reqPath.replace(new RegExp(`^${virtualPath}(.*)`), '$1'));
                 }
             }
         }
-        return path.resolve(process.cwd(), joinPath(this.option.rootPath, reqPath).split('/').map(decodePath).join('/'));
+        return joinPath(this.option.rootPath, reqPath)
     }
     getFilePath = this.getSourcePath;
+
+    /**
+    실제 경로를 서버 요청 경로로 변환.
+    @param sourcePath 디코딩된 경로
+    @returns 인코딩된 실제 경로
+    */
+    getReqPath(sourcePath: string) {
+        let reqPath: string = '';
+
+        if (!sourcePath.endsWith('/')) {
+            sourcePath += '/'
+        }
+        if (this.option.virtualDirectory) {
+            for (const [virtualPath, realPath] of Object.entries(this.option.virtualDirectory)) {
+                if (sourcePath.startsWith(realPath)) {
+                    reqPath = joinPath(virtualPath, sourcePath.replace(new RegExp(`^${realPath}(.*)`), '$1'));
+                }
+            }
+        }
+        if (!reqPath) {
+            if (!sourcePath.startsWith(this.option.rootPath)) {
+                return '';
+            }
+            reqPath = sourcePath.slice(this.option.rootPath.length)
+        }
+        if (!reqPath.startsWith('/')) {
+            reqPath = '/' + reqPath;
+        }
+        if (reqPath.endsWith('/')) {
+            reqPath = reqPath.slice(0, -1)
+        }
+
+        return encodePath(reqPath);
+    }
 
     listen() {
         this.httpServer.listen(this.option.port)
