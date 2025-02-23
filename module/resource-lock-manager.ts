@@ -6,6 +6,7 @@ export interface ResourceLockInterface {
     lock(path: string): string;
     isLocked(path: string): boolean;
     unlock(path: string, lockToken: string): void;
+    unlockForce(path: string): void;
     getLockToken(path: string): string | null;
     isAncestorsLocked(path: string, rootPath: string): boolean;
     canUnlockAncestor(path: string, lockToken: any, rootPath: string): boolean;
@@ -67,6 +68,18 @@ export class ResourceLockManager implements ResourceLockInterface {
         if (!lockData) {
             return
         }
+        lockData.locked = false;
+        lockData.lockToken = null;
+    }
+
+    unlockForce(path: string): void {
+        if (!this.isLocked(path)) {
+            return;
+        }
+
+        const lockData = this.lockDataMap.get(path);
+        if(!lockData) return;
+
         lockData.locked = false;
         lockData.lockToken = null;
     }

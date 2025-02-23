@@ -6,7 +6,6 @@ import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, 
 import { createPropfindXML } from "./xml/propfind.js";
 import { createDeleteXML } from "./xml/delete.js";
 import { ResourceLockInterface, ResourceLockManager } from "./resource-lock-manager.js";
-import { normalize } from "node:path";
 
 function getHttp(version: 'http' | 'http2') {
     if (version === "http") {
@@ -255,7 +254,7 @@ export class WebdavServer {
 
             /*
             잠금 검사
-            삭제하려면 해당 리소스와 상위 폴더가 모두 잠겨있지 않아야함
+            삭제하려면 해당 리소스와 부모 폴더가 모두 잠겨있지 않아야함
             */
             const lockToken = req.headers['lock-token'];
             if (server.lockManager.isLocked(server.getServicePath(filePath))) {
@@ -398,9 +397,6 @@ export class WebdavServer {
                 }
             }
 
-            /*
-            대상 경로의 부모 폴더가 없을 시 잠금 검사하고 생성
-            */
             fs.renameSync(filePath, destinationPath);
             ``
             return res.end();
@@ -415,7 +411,7 @@ export class WebdavServer {
             }
 
             // 부모 폴더가 존재하는지 검사
-            if (!fs.existsSync(getParentPath(reqPath))) {
+            if (!fs.existsSync(getParentPath(sourcePath))) {
                 res.statusCode = 404;
                 return res.end();
             }
@@ -451,6 +447,32 @@ export class WebdavServer {
 
             const destinationPath = server.getSourcePath(decodePath(new URL(destinationHeader).pathname));
             const destinationAlreadyExists = fs.existsSync(destinationPath);
+
+            // 목적지 리소스와 부모 폴더에 대한 잠금 검사
+            const lockToken = req.headers['lock-token'];
+            if (server.lockManager.isLocked(server.getServicePath(destinationPath))) {
+                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(destinationPath))) {
+                    res.statusCode = 423;
+                    return res.end();
+                }
+            }
+            if (server.lockManager.isLocked(server.getServicePath(getParentPath(destinationPath)))) {
+                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(getParentPath(destinationPath)))) {
+                    res.statusCode = 423;
+                    return res.end();
+                }
+            }
+
+            // 만약 목적지에 폴더가 있다면 405 응담
+            if(destinationAlreadyExists && fs.statSync(destinationPath).isDirectory()){
+                res.statusCode = 405;
+                return res.end();
+            }
+            // 목적지의 부모 폴더가 없으면
+            if(!fs.existsSync(getParentPath(destinationPath))){
+                res.statusCode = 404;
+                return res.end();
+            }
 
             /**
              * Override 검사
