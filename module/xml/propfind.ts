@@ -19,7 +19,7 @@ export function createPropfindXML({ server, reqPath, depth }: PropfindArgs) {
             Object.keys(server.option.virtualDirectory).forEach((virtualPath) => {
                 const DResponse = createDResponse({
                     server,
-                    reqPath: joinPath(virtualPath)
+                    reqPath: decodePath(virtualPath)
                 });
                 DMultistatus.appendChild(DResponse)
             })

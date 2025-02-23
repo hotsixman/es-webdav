@@ -5,6 +5,7 @@ import * as mime from 'mime-types';
 import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, slash } from "./func.js";
 import { createPropfindXML } from "./xml/propfind.js";
 import { createDeleteXML } from "./xml/delete.js";
+import path from "node:path";
 
 function getHttp(version: 'http' | 'http2') {
     if (version === "http") {
@@ -415,11 +416,11 @@ export class WebdavServer {
         if(this.option.virtualDirectory){
             for(const [virtualPath, realPath] of Object.entries(this.option.virtualDirectory)){
                 if(reqPath.startsWith(virtualPath)){
-                    return joinPath(realPath, reqPath.replace(new RegExp(`^${virtualPath}(.*)`), '$1'));
+                    return path.resolve(process.cwd(), joinPath(realPath, reqPath.replace(new RegExp(`^${virtualPath}(.*)`), '$1')));
                 }
             }
         }
-        return joinPath(this.option.rootPath, reqPath).split('/').map(decodePath).join('/');
+        return path.resolve(process.cwd(), joinPath(this.option.rootPath, reqPath).split('/').map(decodePath).join('/'));
     }
     getFilePath = this.getSourcePath;
 
