@@ -2,7 +2,7 @@ import * as http1 from "node:http";
 import * as http2 from "node:http2";
 import * as fs from 'node:fs';
 import * as mime from 'mime-types';
-import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, slash, encodePath, resolvePath, getParentPath, isChildPath, getReqPath } from "./func.js";
+import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, slash, encodePath, resolvePath, getParentPath, isChildPath, getReqPath, getEtag, getLockToken } from "./func.js";
 import { createPropfindXML } from "./xml/propfind.js";
 import { createDeleteXML } from "./xml/delete.js";
 import { ResourceLockInterface, ResourceLockManager } from "./resource-lock-manager.js";
@@ -36,6 +36,9 @@ export class WebdavServer {
             const reqPath = getReqPath(req);
             const filePath = server.getFilePath(reqPath);
 
+            /*
+            경로에 리소스가 존재하지 않으면 404 응답
+            */
             if (!fs.existsSync(filePath)) {
                 res.statusCode = 404;
                 res.write('Not found.');
@@ -43,16 +46,18 @@ export class WebdavServer {
             }
 
             const fileStat = fs.statSync(filePath);
-
-            /**
-             * 해당 경로가 디렉토리인 경우
-             */
+            /*
+            해당 경로가 디렉토리인 경우 404 응답
+            */
             if (fileStat.isDirectory()) {
                 res.statusCode = 404;
                 res.write('Not found.');
                 return res.end();
             }
 
+            /*
+            contentType 헤더 준비
+            */
             const contentType = mime.lookup(filePath);
 
             const range = req.headers.range;
@@ -60,6 +65,9 @@ export class WebdavServer {
                 const rangePart = range.replace('bytes=', '').trim().split(',')[0].trim();
                 const [start, end] = rangePart.split('-').map(parseInt);
 
+                /*
+                올바르지 않은 범위
+                */
                 if (start < 0 || start >= fileStat.size || end < 0 || end >= fileStat.size) {
                     res.statusCode = 416;
                     setHeader(res, {
@@ -116,6 +124,9 @@ export class WebdavServer {
             const reqPath = getReqPath(req);
             const filePath = server.getFilePath(reqPath);
 
+            /*
+            경로에 리소스가 존자해지 않는 경우 404 응답
+            */
             if (!fs.existsSync(filePath)) {
                 res.statusCode = 404;
                 res.write('Not found.');
@@ -128,25 +139,22 @@ export class WebdavServer {
              * 해당 경로가 디렉토리인 경우
              */
             if (fileStat.isDirectory()) {
-                res.statusCode = 200;
                 setHeader(res, {
                     'content-length': 0
                 })
-                return res.end();
             }
             else {
                 const contentType = mime.lookup(filePath);
-
-                res.statusCode = 200;
                 setHeader(res, {
                     'content-type': contentType || undefined,
                     'content-length': fileStat.size
                 });
             }
+            res.statusCode = 200;
             setHeader(res, {
                 'allow': Object.keys(this.methodHandler).map(e => e.toUpperCase()).join(', '),
                 'last-modified': fileStat.mtime.toUTCString(),
-                etag: fileStat.ino
+                etag: getEtag(fileStat)
             })
             return res.end();
         },
@@ -154,49 +162,71 @@ export class WebdavServer {
             const reqPath = getReqPath(req);
             const filePath = server.getFilePath(reqPath);
 
-            // override 검사
-            const { overwrite } = req.headers;
-            if (typeof (overwrite) === "string" && (overwrite as string).toUpperCase() === "F") {
-                res.statusCode = 412;
-                return res.end();
-            }
-
-            // 잠금 검사
-            const lockToken = req.headers['lock-token'];
-            if (server.lockManager.isLocked(server.getServicePath(filePath))) {
-                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(filePath))) {
-                    res.statusCode = 423;
-                    return res.end();
-                }
-            }
-            // 부모 폴더 잠금 검사
-            const parentPath = getParentPath(filePath)
-            if (server.lockManager.isLocked(server.getServicePath(parentPath))) {
-                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(parentPath))) {
-                    res.statusCode = 423;
-                    return res.end();
-                }
-            }
+            /*
+            잠금 토큰
+            */
+            const lockToken = getLockToken(req);
 
             const alreadyExists = fs.existsSync(filePath);
-            if (!alreadyExists) {
-                // 파일이 없는 경우 부모 폴더가 없으면 404
+            /*
+            경로에 리소스가 존재하는 경우
+            */
+            if (alreadyExists) {
+                /*
+                경로에 폴더가 존재하는 경우 405 응답
+                */
+                if (fs.statSync(filePath).isDirectory()) {
+                    res.statusCode = 405;
+                    return res.end();
+                }
+                /*
+                Overwrite 헤더가 "F"일 경우 412 응답
+                */
+                const { overwrite } = req.headers;
+                if (typeof (overwrite) === "string" && (overwrite as string).toUpperCase() === "F") {
+                    res.statusCode = 412;
+                    return res.end();
+                }
+                /*
+                경로의 리소스에 대한 잠금 검사
+                */
+                if (server.lockManager.isLocked(reqPath) && !server.lockManager.canUnlock(reqPath, lockToken)) {
+                    res.statusCode = 423;
+                    return res.end();
+                }
+            }
+            /*
+            경로에 리소스가 존재하지 않는 경우
+            */
+            else {
+                /*
+                부모 폴더가 없는 경우 404 응답
+                */
                 if (!fs.existsSync(getParentPath(filePath))) {
                     res.statusCode = 404;
                     return res.end();
                 }
-            }
-            // 만약 경로에 폴더가 존재하는 경우 405 응답
-            if (alreadyExists && fs.statSync(filePath).isDirectory()) {
-                res.statusCode = 405;
-                return res.end();
+                /*
+                부모 폴더 잠금 검사
+                */
+                const parentSourcePath = getParentPath(reqPath);
+                if (server.lockManager.isLocked(parentSourcePath) && !server.lockManager.canUnlock(parentSourcePath, lockToken)) {
+                    res.statusCode = 423;
+                    return res.end();
+                }
             }
 
             await writeFile(req, filePath);
             if (alreadyExists) {
+                /*
+                새로 파일을 생성한 경우 200 응답
+                */
                 res.statusCode = 200;
             }
             else {
+                /*
+                파일을 덮어 쓴 경우 201 응답
+                */
                 res.statusCode = 201;
             }
             return res.end();
@@ -209,10 +239,10 @@ export class WebdavServer {
             const reqPath = getReqPath(req);
             const filePath = server.getFilePath(reqPath);
 
-            let depth = (Number(req.headers.depth) || 0) as (0 | 1);
+            const depth = (Number(req.headers.depth) || 0) as (0 | 1);
 
             /**
-             * 경로에 아무것도 존재하지 않는 경우
+             * 경로에 리소스가 존재하지 않는 경우
              */
             if (!fs.existsSync(filePath)) {
                 res.statusCode = 404;
@@ -233,11 +263,6 @@ export class WebdavServer {
                 return res.end(responseXML);
             }
             catch (err) {
-                console.log(err);
-                return send500();
-            }
-
-            function send500() {
                 res.statusCode = 500;
                 res.write('<?xml version="1.0"?><error>500 Internal Server Error</error>');
                 return res.end();
@@ -247,27 +272,29 @@ export class WebdavServer {
             const reqPath = getReqPath(req);
             const filePath = server.getFilePath(reqPath);
 
+            /*
+            경로에 리소스가 존재하지 않는 경우 404 응답
+            */
             if (!fs.existsSync(filePath)) {
                 res.statusCode = 404;
                 return res.end();
             }
 
+            const lockToken = getLockToken(req);
             /*
-            잠금 검사
-            삭제하려면 해당 리소스와 부모 폴더가 모두 잠겨있지 않아야함
+            경로의 리소스에 대한 잠금 검사
             */
-            const lockToken = req.headers['lock-token'];
-            if (server.lockManager.isLocked(server.getServicePath(filePath))) {
-                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(filePath))) {
-                    res.statusCode = 423;
-                    return res.end();
-                }
+            if (server.lockManager.isLocked(reqPath) && !server.lockManager.canUnlock(reqPath, lockToken)) {
+                res.statusCode = 423;
+                return res.end();
             }
-            if (server.lockManager.isLocked(server.getServicePath(getParentPath(filePath)))) {
-                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(getParentPath(filePath)))) {
-                    res.statusCode = 423;
-                    return res.end();
-                }
+            /*
+            부모 폴더에 대한 잠금 검사
+            */
+            const parentReqPath = getParentPath(reqPath)
+            if (server.lockManager.isLocked(parentReqPath) && !server.lockManager.canUnlock(parentReqPath, lockToken)) {
+                res.statusCode = 423;
+                return res.end();
             }
 
             const fileStat = fs.statSync(filePath);
@@ -275,19 +302,9 @@ export class WebdavServer {
             if (fileStat.isDirectory()) {
                 /*
                 폴더를 삭제하는 경우
-                해당 폴더와 모든 하위 리소스의 경로를 XML로 만들어 응답
+                해당 폴더와 모든 하위 리소스를 삭제하고 그 경로를 XML로 만들어 207 응답
                 */
-                const basePath = slash(server.option.rootPath);
-                const removedPaths = rmDirectory(filePath).map(p => {
-                    if (server.option.virtualDirectory) {
-                        for (const [virtualPath, realPath] of Object.entries(server.option.virtualDirectory)) {
-                            if (isChildPath(realPath, p)) {
-                                return joinPath(virtualPath, p.replace(new RegExp(`^${realPath}(.*)`), '$1'));
-                            }
-                        }
-                    }
-                    return p.replace(new RegExp(`^${escapeRegexp(basePath)}(.*)`), '$1');
-                });
+                const removedPaths = rmDirectory(reqPath, server);
                 const responseXML = createDeleteXML(removedPaths);
                 res.statusCode = 207;
                 setHeader(res, {
@@ -307,17 +324,17 @@ export class WebdavServer {
         },
         async move(req, res, server) {
             const reqPath = getReqPath(req);
-            const filePath = server.getFilePath(reqPath);
-
-            const sourceStat = fs.statSync(filePath);
+            const originSourcePath = server.getFilePath(reqPath);
 
             /*
-            소스 경로가 존재하는 지 확인
+            출발지에 리소스가 존재하는 지 확인
             */
-            if (!fs.existsSync(filePath)) {
+            if (!fs.existsSync(originSourcePath)) {
                 res.statusCode = 404;
                 return res.end();
             }
+
+            const originStat = fs.statSync(originSourcePath);
 
             /*
             목적지 헤더가 존재하는지 확인
@@ -329,17 +346,19 @@ export class WebdavServer {
             }
 
             // 목적지 경로
-            const destinationPath = server.getFilePath(decodePath(new URL(destinationHeader).pathname));
-            const destinationAlreadyExists = fs.existsSync(destinationPath);
-            const destinationParentPath = getParentPath(destinationPath)
+            const destinationServicePath = decodePath(new URL(destinationHeader).pathname);
+            const destinationFilePath = server.getFilePath(destinationServicePath);
+            const destinationAlreadyExists = fs.existsSync(destinationFilePath);
+            const detinationParentServicePath = getParentPath(destinationServicePath);
+            const destinationParentPath = getParentPath(destinationFilePath);
 
-            // 소스가 폴더이고 목적지 경로가 이미 존재하는 경우
-            if (sourceStat.isDirectory() && destinationAlreadyExists) {
+            // 출발지가 폴더이고 목적지 경로가 이미 존재하는 경우 405 응답
+            if (originStat.isDirectory() && destinationAlreadyExists) {
                 res.statusCode = 405;
                 return res.end();
             }
             // 만약 목적지 경로에 폴더가 존재하는 경우 405 응답
-            if (destinationAlreadyExists && fs.statSync(destinationPath).isDirectory()) {
+            if (destinationAlreadyExists && fs.statSync(destinationFilePath).isDirectory()) {
                 res.statusCode = 405;
                 return res.end();
             }
@@ -347,38 +366,41 @@ export class WebdavServer {
             /*
             잠금 검사
             1. 목적지에 이미 파일이 존재하는 경우
-                - 소스가 잠겨있지 않아야 함
+                - 출발지가 잠겨있지 않아야 함
                 - 목적지 파일이 잠겨있지 않아야 함
                 - 목적지 파일의 부모 폴더가 잠겨있지 않아야 함
             2. 목적지에 아무것도 없는 경우
-                - 소스가 잠겨있지 않아야 함
+                - 출발지가 잠겨있지 않아야 함
                 - 목적지의 부모 폴더가 존재해야 함
                 - 목적지의 부모 폴더가 잠겨있지 않아야 함
             */
-            const lockToken = req.headers['lock-token'];
-            // 소스 잠금
-            if (server.lockManager.isLocked(server.getServicePath(filePath))) {
-                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(filePath))) {
-                    res.statusCode = 423;
-                    return res.end();
-                }
+            const lockToken = getLockToken(req);
+            /*
+            출발지 잠금 검사
+            */
+            if (server.lockManager.isLocked(reqPath) && !server.lockManager.canUnlock(reqPath, lockToken)) {
+                res.statusCode = 423;
+                return res.end();
             }
-            // 목적지 부모 폴더 잠금
-            if (server.lockManager.isLocked(server.getServicePath(destinationParentPath))) {
-                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(destinationParentPath))) {
-                    res.statusCode = 423;
-                    return res.end();
-                }
+            /*
+            목적지 부모 폴더 잠금 검사
+            */
+            if (server.lockManager.isLocked(detinationParentServicePath) && !server.lockManager.canUnlock(detinationParentServicePath, lockToken)) {
+                res.statusCode = 423;
+                return res.end();
             }
+            /*
+            목적지에 파일이 존재하는 경우 목적지 파일 잠금 검사
+            */
             if (destinationAlreadyExists) {
-                // 목적지 파일 잠금
-                if (server.lockManager.isLocked(server.getServicePath(destinationPath))) {
-                    if (lockToken !== server.lockManager.getLockToken(server.getServicePath(destinationPath))) {
-                        res.statusCode = 423;
-                        return res.end();
-                    }
+                if (server.lockManager.isLocked(destinationServicePath) && !server.lockManager.canUnlock(destinationServicePath, lockToken)) {
+                    res.statusCode = 423;
+                    return res.end();
                 }
             }
+            /*
+            목적지에 파일이 존재하지 않는 경우 부모 폴더 존재 여부 검사
+            */
             else {
                 // 부모 폴더 존재 여부
                 if (fs.existsSync(destinationParentPath)) {
@@ -397,22 +419,37 @@ export class WebdavServer {
                 }
             }
 
-            fs.renameSync(filePath, destinationPath);
-            ``
+            fs.renameSync(originSourcePath, destinationFilePath);
+
             return res.end();
         },
         async mkcol(req, res, server) {
             const reqPath = getReqPath(req);
             const sourcePath = server.getSourcePath(reqPath);
 
+            /*
+            이미 경로에 리소스가 존재하는 경우
+            */
             if (fs.existsSync(sourcePath)) {
                 res.statusCode = 405;
                 return res.end();
             }
 
-            // 부모 폴더가 존재하는지 검사
-            if (!fs.existsSync(getParentPath(sourcePath))) {
+            const parentSourcePath = getParentPath(sourcePath);
+            const parentServicePath = getParentPath(reqPath);
+            const lockToken = getLockToken(req);
+            /*
+            부모 폴더가 존재하는 지 검사
+            */
+            if (!fs.existsSync(parentSourcePath)) {
                 res.statusCode = 404;
+                return res.end();
+            }
+            /*
+            부모 폴더 잠금 검사
+            */
+            if (server.lockManager.isLocked(parentServicePath) && !server.lockManager.canUnlock(parentServicePath, lockToken)) {
+                res.statusCode = 423;
                 return res.end();
             }
 
@@ -432,9 +469,12 @@ export class WebdavServer {
         },
         async copy(req, res, server) {
             const reqPath = getReqPath(req);
-            const originPath = server.getSourcePath(reqPath);
+            const originSourcePath = server.getSourcePath(reqPath);
 
-            if (!fs.existsSync(originPath) || fs.statSync(originPath).isDirectory()) {
+            /*
+            출발지에 리소스가 없거나 폴더이면 404 응답
+            */
+            if (!fs.existsSync(originSourcePath) || fs.statSync(originSourcePath).isDirectory()) {
                 res.statusCode = 404;
                 return res.end();
             }
@@ -445,31 +485,30 @@ export class WebdavServer {
                 return res.end();
             }
 
-            const destinationPath = server.getSourcePath(decodePath(new URL(destinationHeader).pathname));
-            const destinationAlreadyExists = fs.existsSync(destinationPath);
+            const destinationServicePath = decodePath(new URL(destinationHeader).pathname)
+            const destinationFilePath = server.getSourcePath(destinationServicePath);
+            const destinationAlreadyExists = fs.existsSync(destinationFilePath);
+            const parentServicePath = getParentPath(destinationServicePath);
+            const parentSourcePath = server.getSourcePath(parentServicePath);
 
             // 목적지 리소스와 부모 폴더에 대한 잠금 검사
-            const lockToken = req.headers['lock-token'];
-            if (server.lockManager.isLocked(server.getServicePath(destinationPath))) {
-                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(destinationPath))) {
-                    res.statusCode = 423;
-                    return res.end();
-                }
+            const lockToken = getLockToken(req);
+            if (server.lockManager.isLocked(destinationServicePath) && !server.lockManager.canUnlock(destinationServicePath, lockToken)) {
+                res.statusCode = 423;
+                return res.end();
             }
-            if (server.lockManager.isLocked(server.getServicePath(getParentPath(destinationPath)))) {
-                if (lockToken !== server.lockManager.getLockToken(server.getServicePath(getParentPath(destinationPath)))) {
-                    res.statusCode = 423;
-                    return res.end();
-                }
+            if (server.lockManager.isLocked(parentServicePath) && !server.lockManager.canUnlock(parentServicePath, lockToken)) {
+                res.statusCode = 423;
+                return res.end();
             }
 
             // 만약 목적지에 폴더가 있다면 405 응담
-            if(destinationAlreadyExists && fs.statSync(destinationPath).isDirectory()){
+            if (destinationAlreadyExists && fs.statSync(destinationFilePath).isDirectory()) {
                 res.statusCode = 405;
                 return res.end();
             }
             // 목적지의 부모 폴더가 없으면
-            if(!fs.existsSync(getParentPath(destinationPath))){
+            if (!fs.existsSync(parentSourcePath)) {
                 res.statusCode = 404;
                 return res.end();
             }
@@ -484,8 +523,8 @@ export class WebdavServer {
                 }
             }
 
-            const originStream = fs.createReadStream(originPath);
-            const destinationStream = fs.createWriteStream(destinationPath);
+            const originStream = fs.createReadStream(originSourcePath);
+            const destinationStream = fs.createWriteStream(destinationFilePath);
             await new Promise<void>((res, rej) => {
                 originStream.on('end', res);
                 originStream.on('error', rej);

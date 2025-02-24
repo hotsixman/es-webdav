@@ -7,7 +7,7 @@ import { WebdavServer } from "../webdav-server.js";
 
 export function createPropfindXML({ server, reqPath, depth }: PropfindArgs) {
     depth = depth ?? 0;
-    const stat = fs.statSync(server.getFilePath(reqPath));
+    const stat = fs.statSync(server.getSourcePath(reqPath));
     const xml = createPropfindXMLBase();
     const DMultistatus = xml.childNodes[0];
     if (stat.isDirectory()) {
@@ -34,7 +34,7 @@ export function createPropfindXML({ server, reqPath, depth }: PropfindArgs) {
 }
 
 function createDResponsesInDirectory({ server, reqPath, depth }: PropfindArgs) {
-    var files = fs.readdirSync(server.getFilePath(reqPath));
+    var files = fs.readdirSync(server.getSourcePath(reqPath));
 
     const DResponseArr = [];
 
@@ -74,7 +74,7 @@ function createDResponsesInDirectory({ server, reqPath, depth }: PropfindArgs) {
 }
 
 function createDResponse({ server, reqPath }: Omit<PropfindArgs, "depth">) {
-    let fileStat = fs.statSync(server.getFilePath(reqPath));
+    let fileStat = fs.statSync(server.getSourcePath(reqPath));
     const DResponseBase = createDResponseBase();
     const DResponse = DResponseBase.createElement('D:response');
 
@@ -107,7 +107,7 @@ function createDResponse({ server, reqPath }: Omit<PropfindArgs, "depth">) {
 
 /**
  * `PropfindProperty`가 수정되면 해당 프로퍼티 추가
- * `getcontenttype`, `supportedlock` 추가
+ * @todo `lockdiscovery`, `supportedlock` 추가
  * @param param0 
  * @returns 
  */

@@ -9,7 +9,7 @@ export interface ResourceLockInterface {
     unlockForce(path: string): void;
     getLockToken(path: string): string | null;
     isAncestorsLocked(path: string, rootPath: string): boolean;
-    canUnlockAncestor(path: string, lockToken: any, rootPath: string): boolean;
+    canUnlock(path: string, lockToken: string | string[]): boolean;
 }
 
 type LockData = {
@@ -123,5 +123,14 @@ export class ResourceLockManager implements ResourceLockInterface {
             ppath = getParentPath(ppath);
         }
         return canUnlock;
+    }
+
+    canUnlock(path: string, lockToken: string | string[]): boolean {
+        if(typeof(lockToken) === "string"){
+            return this.getLockToken(path) === lockToken;
+        }
+        else{
+            return lockToken.includes(this.getLockToken(path) as any);
+        }
     }
 }

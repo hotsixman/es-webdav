@@ -101,22 +101,24 @@ export async function asyncPipe(value: any, funcArr: ((arg: any) => any | Promis
  * @param path 
  * @returns 
  */
-export function rmDirectory(path: string) {
+export function rmDirectory(reqPath: string, server: WebdavServer) {
     const paths: string[] = [];
-    const subPaths = fs.readdirSync(path).map(e => joinPath(path, e));
-    for (const subPath of subPaths) {
-        const fileStat = fs.statSync(subPath);
+    const sourcePath = server.getSourcePath(reqPath)
+    const subReqPaths = fs.readdirSync(sourcePath).map(e => joinPath(sourcePath, e)).map(server.getServicePath);
+    for (const subReqPath of subReqPaths) {
+        const fileStat = fs.statSync(subReqPath);
         if (fileStat.isDirectory()) {
-            const removedPaths = rmDirectory(subPath);
+            const removedPaths = rmDirectory(subReqPath, server);
             paths.push(...removedPaths);
         }
         else {
-            fs.rmSync(subPath);
-            paths.push(subPath);
+            const subSourcePath = server.getSourcePath(subReqPath)
+            fs.rmSync(subSourcePath);
+            paths.push(subReqPath);
         }
     }
-    fs.rmdirSync(path);
-    paths.push(path);
+    fs.rmdirSync(sourcePath);
+    paths.push(reqPath);
     return paths;
 }
 
@@ -163,10 +165,48 @@ export function isChildPath(parentPath:string, childPath: string): boolean {
     return childPath.startsWith(parentPath)
 }
 
+/**
+ * 두 경로가 같은 지 비교
+ * @param parentPath 
+ * @param childPath 
+ * @returns 
+ */
+export function isSamePath(path1:string, path2: string): boolean {
+    if(!path1.endsWith('/')){
+        path1 += "/"
+    }
+    if(!path2.endsWith('/')){
+        path2 += '/'
+    }
+
+    return path2.startsWith(path1)
+}
+
 export function getReqPath(req: Http2ServerRequest){
     let reqPath = decodePath(req.url);
     if(reqPath !=="/" && reqPath.endsWith('/')){
         reqPath = reqPath.slice(0, -1)
     }
     return reqPath;
+}
+
+/*
+req에서 lock-token을 가져옴
+*/
+export function getLockToken(req: Http2ServerRequest): string | string[]{
+    let lockToken = req.headers['lock-token'];
+    if(typeof(lockToken) === "string"){
+        if(lockToken.includes(",")){
+            return lockToken.split(",").map(e => e.trim());
+        }
+        else{
+            return lockToken;
+        }
+    }
+    else if(Array.isArray(lockToken)){
+        return lockToken;
+    }
+    else{
+        return [];
+    }
 }
