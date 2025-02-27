@@ -4,43 +4,47 @@ import { DOMParser, XMLSerializer } from "xmldom";
 import * as mime from 'mime-types';
 import { decodePath, encodePath, getEtag, joinPath } from "../func.js";
 import { WebdavServer } from "../webdav-server.js";
+import { createLockXML } from "./lock.js";
 
-export function createPropfindXML({ server, reqPath, depth }: PropfindArgs) {
+export function createPropfindXML({ server, servicePath, depth }: PropfindArgs) {
     depth = depth ?? 0;
-    const stat = fs.statSync(server.getSourcePath(reqPath));
+    const stat = fs.statSync(server.getSourcePath(servicePath));
     const xml = createPropfindXMLBase();
     const DMultistatus = xml.childNodes[0];
     if (stat.isDirectory()) {
-        const DResponseArr = createDResponsesInDirectory({ server, reqPath, depth });
+        const DResponseArr = createDResponsesInDirectory({ server, servicePath, depth });
         DResponseArr.forEach(DResponse => {
             DMultistatus.appendChild(DResponse);
         })
-        if (reqPath === "/" && server.option.virtualDirectory) {
-            Object.keys(server.option.virtualDirectory).forEach((virtualPath) => {
+        if (servicePath === "/" && server.option.virtualDirectory) {
+            Object.entries(server.option.virtualDirectory).forEach(([virtualPath, realPath]) => {
+                if(!fs.existsSync(realPath)){
+                    return;
+                }
                 const DResponse = createDResponse({
                     server,
-                    reqPath: decodePath(virtualPath)
+                    servicePath: virtualPath
                 });
                 DMultistatus.appendChild(DResponse)
             })
         }
     }
     else {
-        const DResponse = createDResponse({ server, reqPath });
+        const DResponse = createDResponse({ server, servicePath });
         DMultistatus.appendChild(DResponse);
     }
 
     return '<?xml version="1.0" encoding="utf-8" ?>' + new XMLSerializer().serializeToString(xml);
 }
 
-function createDResponsesInDirectory({ server, reqPath, depth }: PropfindArgs) {
-    var files = fs.readdirSync(server.getSourcePath(reqPath));
+function createDResponsesInDirectory({ server, servicePath, depth }: PropfindArgs) {
+    var files = fs.readdirSync(server.getSourcePath(servicePath));
 
     const DResponseArr = [];
 
     DResponseArr.push(createDResponse({
         server,
-        reqPath
+        servicePath
     }));
 
     if (depth === 1) {
@@ -48,7 +52,7 @@ function createDResponsesInDirectory({ server, reqPath, depth }: PropfindArgs) {
             try {
                 return createDResponse({
                     server,
-                    reqPath: joinPath(reqPath, file)
+                    servicePath: joinPath(servicePath, file)
                 })
             }
             catch {
@@ -56,7 +60,7 @@ function createDResponsesInDirectory({ server, reqPath, depth }: PropfindArgs) {
                 const DResponse = DResponseBase.createElement('D:response');
 
                 const DHref = DResponseBase.createElement('D:href');
-                DHref.textContent = encodePath(joinPath(reqPath, file));
+                DHref.textContent = encodePath(joinPath(servicePath, file));
 
                 const DPropstat = DResponseBase.createElement('D:propstat');
                 const DStatus = DResponseBase.createElement('D:status');
@@ -73,29 +77,29 @@ function createDResponsesInDirectory({ server, reqPath, depth }: PropfindArgs) {
     return DResponseArr;
 }
 
-function createDResponse({ server, reqPath }: Omit<PropfindArgs, "depth">) {
-    let fileStat = fs.statSync(server.getSourcePath(reqPath));
+function createDResponse({ server, servicePath }: Omit<PropfindArgs, "depth">) {
+    let fileStat = fs.statSync(server.getSourcePath(servicePath));
     const DResponseBase = createDResponseBase();
     const DResponse = DResponseBase.createElement('D:response');
 
     const DHref = DResponseBase.createElement('D:href');
-    DHref.textContent = encodePath(reqPath);
+    DHref.textContent = encodePath(servicePath);
     DResponse.appendChild(DHref);
 
     const DPropstat = DResponseBase.createElement('D:propstat');
     DResponse.appendChild(DPropstat);
 
-    const mimeType = mime.lookup(path.basename(reqPath));
+    const mimeType = mime.lookup(path.basename(servicePath));
     const property: PropfindProperty = {
         creationdate: fileStat.ctime,
-        displayname: fileStat.isFile() ? path.basename(reqPath) : (reqPath.split('/').at(-2) ?? '/'),
+        displayname: fileStat.isFile() ? path.basename(servicePath) : (servicePath.split('/').at(-2) ?? '/'),
         getcontentlength: fileStat.size,
         getcontenttype: mimeType || undefined,
         getetag: getEtag(fileStat),
         getlastmodified: fileStat.mtime,
         resourcetype: fileStat.isDirectory() ? 'collection' : undefined
     }
-    const DProp = createDPropXML({ property, DResponseBase });
+    const DProp = createDPropXML({ property, DResponseBase, server, servicePath });
     DPropstat.appendChild(DProp);
 
     const DStatus = DResponseBase.createElement('D:status');
@@ -107,11 +111,11 @@ function createDResponse({ server, reqPath }: Omit<PropfindArgs, "depth">) {
 
 /**
  * `PropfindProperty`가 수정되면 해당 프로퍼티 추가
- * @todo `lockdiscovery`, `supportedlock` 추가
+ * @todo shared lock을 사용하게 된다면 `supportedlock`에 추가
  * @param param0 
  * @returns 
  */
-function createDPropXML({ property, DResponseBase }: { property: PropfindProperty, DResponseBase: Document }) {
+function createDPropXML({ property, DResponseBase, server, servicePath }: { property: PropfindProperty, DResponseBase: Document, server: WebdavServer, servicePath: string }) {
     const DProp = DResponseBase.createElement('D:prop');
 
     {
@@ -152,6 +156,9 @@ function createDPropXML({ property, DResponseBase }: { property: PropfindPropert
         if (property.getcontenttype) {
             DGetcontenttype.textContent = property.getcontenttype;
         }
+        else{
+            DGetcontenttype.textContent = "text/plain";
+        }
         DProp.appendChild(DGetcontenttype);
     }
 
@@ -161,9 +168,19 @@ function createDPropXML({ property, DResponseBase }: { property: PropfindPropert
         DProp.appendChild(DGetcontentlength);
     }
 
+    if(server.lockManager.isLocked(servicePath)){
+        const lockToken = server.lockManager.getLockToken(servicePath);
+        const timeout = server.lockManager.getTimeout(servicePath)
+        const DLockdiscovery = new DOMParser().parseFromString(createLockXML(lockToken as string, timeout)).getElementsByTagName('D:lockdiscovery')[0];
+        if(DLockdiscovery){
+            DProp.appendChild(DLockdiscovery);
+        }
+    }
+
     {
-        DProp.appendChild(DResponseBase.createElement('D:lockdiscovery'));
-        DProp.appendChild(DResponseBase.createElement('D:supportedlock'));
+        const DSupportedlock = DResponseBase.createElement('D:supportedlock');
+        DSupportedlock.innerHTML = '<D:lockentry><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockentry>';
+        DProp.appendChild(DSupportedlock);
     }
 
     return DProp;
@@ -180,7 +197,7 @@ function createDResponseBase() {
 
 
 interface PropfindArgs {
-    reqPath: string;
+    servicePath: string;
     depth?: 0 | 1;
     server: WebdavServer;
 }

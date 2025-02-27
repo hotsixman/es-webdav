@@ -2,10 +2,12 @@ import * as http1 from "node:http";
 import * as http2 from "node:http2";
 import * as fs from 'node:fs';
 import * as mime from 'mime-types';
-import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, slash, encodePath, resolvePath, getParentPath, isChildPath, getReqPath, getEtag, getLockToken } from "./func.js";
+import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, slash, encodePath, resolvePath, getParentPath, isChildPath, getReqPath, getEtag, getLockToken, getTimeout, getDepth, lockPath } from "./func.js";
 import { createPropfindXML } from "./xml/propfind.js";
 import { createDeleteXML } from "./xml/delete.js";
 import { ResourceLockInterface, ResourceLockManager } from "./resource-lock-manager.js";
+import { createLockXML } from "./xml/lock.js";
+import { ExpectedError } from "./expected-error.js";
 
 function getHttp(version: 'http' | 'http2') {
     if (version === "http") {
@@ -34,7 +36,7 @@ export class WebdavServer {
         },
         async get(req, res, server) {
             const reqPath = getReqPath(req);
-            const filePath = server.getFilePath(reqPath);
+            const filePath = server.getSourcePath(reqPath);
 
             /*
             경로에 리소스가 존재하지 않으면 404 응답
@@ -122,7 +124,7 @@ export class WebdavServer {
         },
         async head(req, res, server) {
             const reqPath = getReqPath(req);
-            const filePath = server.getFilePath(reqPath);
+            const filePath = server.getSourcePath(reqPath);
 
             /*
             경로에 리소스가 존자해지 않는 경우 404 응답
@@ -152,7 +154,7 @@ export class WebdavServer {
             }
             res.statusCode = 200;
             setHeader(res, {
-                'allow': Object.keys(this.methodHandler).map(e => e.toUpperCase()).join(', '),
+                'allow': Object.keys(WebdavServer.methodHandler).map(e => e.toUpperCase()).join(', '),
                 'last-modified': fileStat.mtime.toUTCString(),
                 etag: getEtag(fileStat)
             })
@@ -160,7 +162,7 @@ export class WebdavServer {
         },
         async put(req, res, server) {
             const reqPath = getReqPath(req);
-            const filePath = server.getFilePath(reqPath);
+            const filePath = server.getSourcePath(reqPath);
 
             /*
             잠금 토큰
@@ -237,7 +239,7 @@ export class WebdavServer {
          */
         async propfind(req, res, server) {
             const reqPath = getReqPath(req);
-            const filePath = server.getFilePath(reqPath);
+            const filePath = server.getSourcePath(reqPath);
 
             const depth = (Number(req.headers.depth) || 0) as (0 | 1);
 
@@ -256,7 +258,7 @@ export class WebdavServer {
                     'dav': '1'
                 })
                 const responseXML = createPropfindXML({
-                    reqPath,
+                    servicePath: reqPath,
                     depth,
                     server
                 });
@@ -265,12 +267,13 @@ export class WebdavServer {
             catch (err) {
                 res.statusCode = 500;
                 res.write('<?xml version="1.0"?><error>500 Internal Server Error</error>');
+                console.log(err);
                 return res.end();
             }
         },
         async delete(req, res, server) {
             const reqPath = getReqPath(req);
-            const filePath = server.getFilePath(reqPath);
+            const filePath = server.getSourcePath(reqPath);
 
             /*
             경로에 리소스가 존재하지 않는 경우 404 응답
@@ -324,7 +327,7 @@ export class WebdavServer {
         },
         async move(req, res, server) {
             const reqPath = getReqPath(req);
-            const originSourcePath = server.getFilePath(reqPath);
+            const originSourcePath = server.getSourcePath(reqPath);
 
             /*
             출발지에 리소스가 존재하는 지 확인
@@ -347,7 +350,7 @@ export class WebdavServer {
 
             // 목적지 경로
             const destinationServicePath = decodePath(new URL(destinationHeader).pathname);
-            const destinationFilePath = server.getFilePath(destinationServicePath);
+            const destinationFilePath = server.getSourcePath(destinationServicePath);
             const destinationAlreadyExists = fs.existsSync(destinationFilePath);
             const detinationParentServicePath = getParentPath(destinationServicePath);
             const destinationParentPath = getParentPath(destinationFilePath);
@@ -539,6 +542,38 @@ export class WebdavServer {
             }
 
             return res.end();
+        },
+        /**
+         * @todo? lockscope에 shared 구현 - 권한 관리 추가 이후
+         * @todo createLockXML 완성
+        */
+        async lock(req, res, server) {
+            const reqPath = getReqPath(req);
+            const sourcePath = server.getSourcePath(reqPath);
+
+            /*
+            경로에 리소스가 없는 경우 404 응답
+            */
+            if (!fs.existsSync(sourcePath)) {
+                res.statusCode = 404;
+                return res.end();
+            }
+
+            const timeout = getTimeout(req);
+            const depth = getDepth(req);
+
+            const lockToken = lockPath(reqPath, server, depth, timeout);
+            if (lockToken) {
+                const responseXML = createLockXML(lockToken, timeout);
+                setHeader(res, {
+                    'lock-token': `<opaquelocktoken:${lockToken}>`
+                })
+                res.write(responseXML);
+                return res.end();
+            }
+            else{
+                throw new ExpectedError("LOCK_FAILED");
+            }
         }
     }
 
@@ -546,6 +581,7 @@ export class WebdavServer {
     httpServer: http1.Server | http2.Http2Server;
     option: WebdavServerOption;
     lockManager: ResourceLockInterface = new ResourceLockManager();
+    thisServer = this;
 
     constructor(option?: Partial<WebdavServerOption>) {
         this.option = {
@@ -626,15 +662,12 @@ export class WebdavServer {
         }
         return sourcePath;
     }
-    getFilePath = this.getSourcePath;
-
     /**
     실제 경로를 서버 요청 경로로 변환.
     인자와 반환값 모두 디코딩된 경로.
     */
     getServicePath(sourcePath: string) {
         let reqPath: string = '';
-
         if (this.option.virtualDirectory) {
             for (const [virtualPath, realPath] of Object.entries(this.option.virtualDirectory)) {
                 if (isChildPath(realPath, sourcePath)) {

@@ -37,9 +37,9 @@ export function resolvePath(...args: string[]) {
  * @param pathname 
  * @returns 
  */
-export function getParentPath(pathname: string): string{
+export function getParentPath(pathname: string): string {
     let dirname = path.dirname(pathname);
-    if(dirname.endsWith('/')){
+    if (dirname.endsWith('/')) {
         dirname = dirname.slice(0, -1)
     }
     return slash(dirname)
@@ -103,18 +103,18 @@ export async function asyncPipe(value: any, funcArr: ((arg: any) => any | Promis
  */
 export function rmDirectory(reqPath: string, server: WebdavServer) {
     const paths: string[] = [];
-    const sourcePath = server.getSourcePath(reqPath)
-    const subReqPaths = fs.readdirSync(sourcePath).map(e => joinPath(sourcePath, e)).map(server.getServicePath);
-    for (const subReqPath of subReqPaths) {
-        const fileStat = fs.statSync(subReqPath);
+    const sourcePath = server.getSourcePath(reqPath);
+    const subServicePaths = fs.readdirSync(sourcePath).map(e => joinPath(sourcePath, e)).map((e) => server.getServicePath(e));
+    for (const subServicePath of subServicePaths) {
+        const subSourcePath = server.getSourcePath(subServicePath);
+        const fileStat = fs.statSync(subSourcePath);
         if (fileStat.isDirectory()) {
-            const removedPaths = rmDirectory(subReqPath, server);
+            const removedPaths = rmDirectory(subServicePath, server);
             paths.push(...removedPaths);
         }
         else {
-            const subSourcePath = server.getSourcePath(subReqPath)
             fs.rmSync(subSourcePath);
-            paths.push(subReqPath);
+            paths.push(subServicePath);
         }
     }
     fs.rmdirSync(sourcePath);
@@ -144,7 +144,7 @@ export function escapeRegexp(string: string) {
  * @param fileStat 
  * @returns 
  */
-export function getEtag(fileStat: fs.Stats){
+export function getEtag(fileStat: fs.Stats) {
     return `${fileStat.ino}-${fileStat.ctimeMs}-${fileStat.mtimeMs}`;
 }
 
@@ -154,11 +154,11 @@ export function getEtag(fileStat: fs.Stats){
  * @param childPath 
  * @returns 
  */
-export function isChildPath(parentPath:string, childPath: string): boolean {
-    if(!parentPath.endsWith('/')){
+export function isChildPath(parentPath: string, childPath: string): boolean {
+    if (!parentPath.endsWith('/')) {
         parentPath += "/"
     }
-    if(!childPath.endsWith('/')){
+    if (!childPath.endsWith('/')) {
         childPath += '/'
     }
 
@@ -171,20 +171,20 @@ export function isChildPath(parentPath:string, childPath: string): boolean {
  * @param childPath 
  * @returns 
  */
-export function isSamePath(path1:string, path2: string): boolean {
-    if(!path1.endsWith('/')){
+export function isSamePath(path1: string, path2: string): boolean {
+    if (!path1.endsWith('/')) {
         path1 += "/"
     }
-    if(!path2.endsWith('/')){
+    if (!path2.endsWith('/')) {
         path2 += '/'
     }
 
     return path2.startsWith(path1)
 }
 
-export function getReqPath(req: Http2ServerRequest){
+export function getReqPath(req: Http2ServerRequest) {
     let reqPath = decodePath(req.url);
-    if(reqPath !=="/" && reqPath.endsWith('/')){
+    if (reqPath !== "/" && reqPath.endsWith('/')) {
         reqPath = reqPath.slice(0, -1)
     }
     return reqPath;
@@ -193,20 +193,92 @@ export function getReqPath(req: Http2ServerRequest){
 /*
 req에서 lock-token을 가져옴
 */
-export function getLockToken(req: Http2ServerRequest): string | string[]{
+export function getLockToken(req: Http2ServerRequest): string | string[] {
     let lockToken = req.headers['lock-token'];
-    if(typeof(lockToken) === "string"){
-        if(lockToken.includes(",")){
+    if (typeof (lockToken) === "string") {
+        if (lockToken.includes(",")) {
             return lockToken.split(",").map(e => e.trim());
         }
-        else{
+        else {
             return lockToken;
         }
     }
-    else if(Array.isArray(lockToken)){
+    else if (Array.isArray(lockToken)) {
         return lockToken;
     }
-    else{
+    else {
         return [];
     }
+}
+
+/*
+req에서 timeout을 가져옴
+*/
+export function getTimeout(req: Http2ServerRequest): number | null {
+    let timeoutHeader = req.headers['timeout'];
+    if (typeof (timeoutHeader) !== "string") {
+        return null;
+    }
+    timeoutHeader = timeoutHeader.toLowerCase();
+
+    if (timeoutHeader.startsWith("second")) {
+        return Number(timeoutHeader.replace(/^second\-/, '')) || null;
+    }
+
+    return null;
+}
+
+/*
+req에서 Depth를 가져옴
+*/
+export function getDepth(req: Http2ServerRequest): number {
+    const depth = req.headers.depth;
+
+    if (depth === "infinity") {
+        return Infinity;
+    }
+    if (!depth) {
+        return 0;
+    }
+
+    return Number(depth) || 0;
+}
+
+/*
+특정 경로를 잠금
+*/
+export function lockPath(servicePath: string, server: WebdavServer, depth: number, timeout: number | null = null, lockToken?: string): string | null {
+    //const lockedServicePath: string[] = [];
+
+    const sourcePath = server.getSourcePath(servicePath);
+    if (!fs.existsSync(sourcePath)) {
+        return null;
+    }
+
+    try {
+        const l = server.lockManager.lock(servicePath, timeout);
+        if (!lockToken) {
+            lockToken = l;
+        }
+    }
+    catch {
+        return null;
+    }
+    //lockedServicePath.push(servicePath);
+
+    if (depth === Infinity) {
+        if (fs.statSync(sourcePath).isDirectory()) {
+            const entries = fs.readdirSync(sourcePath);
+            if (servicePath === "/" && server.option.virtualDirectory) {
+                entries.push(...Object.keys(server.option.virtualDirectory));
+            }
+            entries.forEach((entry) => {
+                const entryServicePath = joinPath(servicePath, entry);
+                lockPath(entryServicePath, server, depth, timeout, lockToken);
+                //lockedServicePath.push(...locked);
+            })
+        }
+    }
+
+    return lockToken;
 }
