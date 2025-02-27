@@ -562,6 +562,7 @@ export class WebdavServer {
             const timeout = getTimeout(req);
             const depth = getDepth(req);
 
+            // lock이 성공하면 잠금 토큰(string)을 반환
             const lockToken = lockPath(reqPath, server, depth, timeout);
             if (lockToken) {
                 const responseXML = createLockXML(lockToken, timeout);
@@ -574,6 +575,34 @@ export class WebdavServer {
             else{
                 throw new ExpectedError("LOCK_FAILED");
             }
+        },
+        async unlock(req, res, server){
+            const reqPath = getReqPath(req);
+            const sourcePath = server.getSourcePath(reqPath);
+
+            /* 소스 경로에 리소스가 없는 경우 */
+            if(!fs.existsSync(sourcePath)){
+                res.statusCode = 404;
+                return res.end();
+            }
+
+            /* 소스의 리소스가 잠겨있지 않는 경우 */
+            if(!server.lockManager.isLocked(reqPath)){
+                res.statusCode = 409;
+                return res.end();
+            }
+
+            const lockToken = getLockToken(req);
+
+            /* 잠금 토큰이 잘못된 경우 */
+            if(!server.lockManager.canUnlock(reqPath, lockToken)){
+                res.statusCode = 412;
+                return res.end();
+            }
+
+            server.lockManager.unlock(reqPath, lockToken);
+            res.statusCode = 200;
+            return res.end();
         }
     }
 

@@ -5,7 +5,7 @@ import { getParentPath } from "./func.js";
 export interface ResourceLockInterface {
     lock(path: string, timeout?: number | null, lockToken?: string): string;
     isLocked(path: string): boolean;
-    unlock(path: string, lockToken: string): void;
+    unlock(path: string, lockToken: string | string[]): void;
     unlockForce(path: string): void;
     getLockToken(path: string): string | null;
     canUnlock(path: string, lockToken: string | string[]): boolean;
@@ -83,13 +83,20 @@ export class ResourceLockManager implements ResourceLockInterface {
      * @throws `NOT_LOCKED` 해당 경로가 잠겨있지 않음
      * @throws `INVALID_LOCK_TOKEN` 잠금 토큰이 일치하지 않음
      */
-    unlock(path: string, lockToken: string) {
+    unlock(path: string, lockToken: string | string[]) {
         if (!this.isLocked(path)) {
             throw new ExpectedError("NOT_LOCKED")
         }
 
-        if (this.lockDataMap.get(path)?.lockToken !== lockToken) {
-            throw new ExpectedError("INVALID_LOCK_TOKEN")
+        if (typeof (lockToken) === "string") {
+            if (this.lockDataMap.get(path)?.lockToken !== lockToken) {
+                throw new ExpectedError("INVALID_LOCK_TOKEN")
+            }
+        }
+        else{
+            if (!lockToken.includes(this.lockDataMap.get(path)?.lockToken as any)) {
+                throw new ExpectedError("INVALID_LOCK_TOKEN")
+            }
         }
 
         const lockData = this.lockDataMap.get(path)
@@ -127,7 +134,7 @@ export class ResourceLockManager implements ResourceLockInterface {
         return this.lockDataMap.get(path)?.expiration ?? null;
     }
 
-    getTimeout(path: string): number | null{
+    getTimeout(path: string): number | null {
         return this.lockDataMap.get(path)?.timeout ?? null;
     }
 
