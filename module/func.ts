@@ -228,7 +228,7 @@ export function getTimeout(req: Http2ServerRequest): number | null {
     return null;
 }
 
-/*
+/**
 req에서 Depth를 가져옴
 */
 export function getDepth(req: Http2ServerRequest): number {
@@ -244,8 +244,8 @@ export function getDepth(req: Http2ServerRequest): number {
     return Number(depth) || 0;
 }
 
-/*
-특정 경로를 잠금
+/**
+ * 특정 경로를 잠금
 */
 export function lockPath(servicePath: string, server: WebdavServer, depth: number, timeout: number | null = null, lockToken?: string): string | null {
     //const lockedServicePath: string[] = [];
@@ -281,4 +281,32 @@ export function lockPath(servicePath: string, server: WebdavServer, depth: numbe
     }
 
     return lockToken;
+}
+
+/**
+ * 요청 헤더에서 유저와 패스워드를 반환
+ * @param req 
+ */
+export function getAuth(req: Http2ServerRequest): [string, string] | null{
+    const authHeader = req.headers.authorization;
+
+    if(!authHeader){
+        return null;
+    }
+    if(typeof(authHeader) !== "string"){
+        return null;
+    }
+
+    const [authType, credentials] = authHeader.split(" ").map(e => e.trim());
+    switch(authType){
+        case("Basic"):{
+            const decodedCredentials = atob(credentials);
+            const [user, password] = decodedCredentials.split(":");
+            return [user, password];
+        }
+    }
+
+
+
+    return null;
 }

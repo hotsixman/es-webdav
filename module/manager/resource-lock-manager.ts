@@ -1,6 +1,6 @@
 import { normalize } from "path";
-import { ExpectedError } from "./expected-error.js";
-import { getParentPath } from "./func.js";
+import { ExpectedError } from "../expected-error.js";
+import { getParentPath } from "../func.js";
 
 export interface ResourceLockInterface {
     lock(path: string, timeout?: number | null, lockToken?: string): string;

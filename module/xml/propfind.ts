@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { DOMParser, XMLSerializer } from "xmldom";
 import * as mime from 'mime-types';
-import { decodePath, encodePath, getEtag, joinPath } from "../func.js";
+import { encodePath, getEtag, joinPath } from "../func.js";
 import { WebdavServer } from "../webdav-server.js";
 import { createLockXML } from "./lock.js";
 
@@ -16,7 +16,7 @@ export function createPropfindXML({ server, servicePath, depth }: PropfindArgs) 
         DResponseArr.forEach(DResponse => {
             DMultistatus.appendChild(DResponse);
         })
-        if (servicePath === "/" && server.option.virtualDirectory) {
+        if (servicePath === server.option.davRootPath && server.option.virtualDirectory) {
             Object.entries(server.option.virtualDirectory).forEach(([virtualPath, realPath]) => {
                 if(!fs.existsSync(realPath)){
                     return;

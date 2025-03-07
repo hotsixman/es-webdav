@@ -5,9 +5,10 @@ import * as mime from 'mime-types';
 import { setHeader, joinPath, writeFile, decodePath, rmDirectory, escapeRegexp, slash, encodePath, resolvePath, getParentPath, isChildPath, getReqPath, getEtag, getLockToken, getTimeout, getDepth, lockPath } from "./func.js";
 import { createPropfindXML } from "./xml/propfind.js";
 import { createDeleteXML } from "./xml/delete.js";
-import { ResourceLockInterface, ResourceLockManager } from "./resource-lock-manager.js";
+import { ResourceLockInterface, ResourceLockManager } from "./manager/resource-lock-manager.js";
 import { createLockXML } from "./xml/lock.js";
 import { ExpectedError } from "./expected-error.js";
+import { AuthInterface, AuthManager } from "./manager/auth-manager.js";
 
 function getHttp(version: 'http' | 'http2') {
     if (version === "http") {
@@ -406,7 +407,7 @@ export class WebdavServer {
             */
             else {
                 // 부모 폴더 존재 여부
-                if (fs.existsSync(destinationParentPath)) {
+                if (!fs.existsSync(destinationParentPath)) {
                     res.statusCode = 404;
                     return res.end();
                 }
@@ -572,22 +573,22 @@ export class WebdavServer {
                 res.write(responseXML);
                 return res.end();
             }
-            else{
+            else {
                 throw new ExpectedError("LOCK_FAILED");
             }
         },
-        async unlock(req, res, server){
+        async unlock(req, res, server) {
             const reqPath = getReqPath(req);
             const sourcePath = server.getSourcePath(reqPath);
 
             /* 소스 경로에 리소스가 없는 경우 */
-            if(!fs.existsSync(sourcePath)){
+            if (!fs.existsSync(sourcePath)) {
                 res.statusCode = 404;
                 return res.end();
             }
 
             /* 소스의 리소스가 잠겨있지 않는 경우 */
-            if(!server.lockManager.isLocked(reqPath)){
+            if (!server.lockManager.isLocked(reqPath)) {
                 res.statusCode = 409;
                 return res.end();
             }
@@ -595,7 +596,7 @@ export class WebdavServer {
             const lockToken = getLockToken(req);
 
             /* 잠금 토큰이 잘못된 경우 */
-            if(!server.lockManager.canUnlock(reqPath, lockToken)){
+            if (!server.lockManager.canUnlock(reqPath, lockToken)) {
                 res.statusCode = 412;
                 return res.end();
             }
@@ -610,6 +611,7 @@ export class WebdavServer {
     httpServer: http1.Server | http2.Http2Server;
     option: WebdavServerOption;
     lockManager: ResourceLockInterface = new ResourceLockManager();
+    authManager: AuthInterface = new AuthManager();
     thisServer = this;
 
     constructor(option?: Partial<WebdavServerOption>) {
@@ -618,6 +620,7 @@ export class WebdavServer {
             port: option?.port ?? 3000,
             middlewares: option?.middlewares,
             rootPath: resolvePath(process.cwd(), option?.rootPath ?? '.'),
+            davRootPath: option?.davRootPath ?? '/dav'
         }
         if (!this.option.rootPath.endsWith('/')) {
             this.option.rootPath += '/'
@@ -637,6 +640,12 @@ export class WebdavServer {
             })
             this.option.virtualDirectory = vDirectoryMap;
         }
+        if (option?.authManager) {
+            this.authManager = option.authManager;
+        }
+        if (option?.lockManager) {
+            this.lockManager = option.lockManager;
+        }
 
         this.httpServer = getHttp(this.option.version).createServer(async (req, res) => {
             try {
@@ -649,20 +658,22 @@ export class WebdavServer {
                     }
                 }
 
-                for (const [method, handler] of Object.entries(WebdavServer.methodHandler)) {
-                    if (req.method.toUpperCase() === method.toUpperCase()) {
-                        return await handler(req, res, this);
+                if (getReqPath(req).startsWith(this.option.davRootPath)) {
+                    for (const [method, handler] of Object.entries(WebdavServer.methodHandler)) {
+                        if (req.method.toUpperCase() === method.toUpperCase()) {
+                            return await handler(req, res, this);
+                        }
                     }
                 }
+
+                res.statusCode = 404;
+                return res.end();
             }
             catch (err) {
                 console.log(err);
                 res.statusCode = 500;
                 return res.end();
             }
-
-            res.statusCode = 400;
-            return res.end();
         });
     }
 
@@ -671,6 +682,10 @@ export class WebdavServer {
     인자와 반환값 모두 디코딩된 경로.
     */
     getSourcePath(reqPath: string) {
+        if (reqPath.startsWith(this.option.davRootPath)) {
+            reqPath = reqPath.slice(this.option.davRootPath.length)
+        }
+
         let sourcePath: string = "";
         if (!reqPath.endsWith('/')) {
             reqPath += '/'
@@ -718,6 +733,8 @@ export class WebdavServer {
             reqPath = reqPath.slice(0, -1)
         }
 
+        reqPath = joinPath('/dav', reqPath);
+
         return reqPath;
     }
 
@@ -733,5 +750,8 @@ interface WebdavServerOption {
     port: number;
     middlewares?: RequestHandler[];
     rootPath: string;
+    davRootPath: string;
     virtualDirectory?: Record<string, string>;
+    lockManager?: ResourceLockInterface;
+    authManager?: AuthInterface;
 }
