@@ -77,7 +77,7 @@ function createDResponse({ server, servicePath }) {
     const mimeType = mime.lookup(path.basename(servicePath));
     const property = {
         creationdate: fileStat.ctime,
-        displayname: fileStat.isFile() ? path.basename(servicePath) : (servicePath.split('/').at(-2) ?? '/'),
+        displayname: path.basename(servicePath),
         getcontentlength: fileStat.size,
         getcontenttype: mimeType || undefined,
         getetag: getEtag(fileStat),
