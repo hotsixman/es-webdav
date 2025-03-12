@@ -2,7 +2,6 @@ import { Http2ServerRequest, Http2ServerResponse, OutgoingHttpHeaders } from "no
 import * as path from 'path';
 import { WebdavServer } from "./webdav-server.js";
 import * as fs from 'node:fs';
-import mime from 'mime-types';
 
 /**
  * `Record` 형식으로 응답 헤더를 추가
@@ -305,8 +304,6 @@ export function getAuth(req: Http2ServerRequest): [string, string] | null{
             return [user, password];
         }
     }
-
-
 
     return null;
 }
