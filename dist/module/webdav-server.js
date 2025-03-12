@@ -56,20 +56,23 @@ export class WebdavServer {
                     return res.end();
                 }
                 const chunkSize = end - start + 1;
+                res.statusCode = 206;
+                setHeader(res, {
+                    'accept-ranges': 'bytes',
+                    'content-type': contentType || undefined,
+                    'content-length': chunkSize,
+                    "content-range": `bytes ${start}-${end}/${fileStat.size}`
+                });
                 await new Promise((resolve, reject) => {
                     const fileStream = fs.createReadStream(filePath, { start, end });
                     fileStream.on('end', resolve);
                     fileStream.on('error', reject);
                     fileStream.pipe(res);
                 });
-                res.statusCode = 206;
-                setHeader(res, {
-                    'accept-ranges': 'bypes',
-                    'content-type': contentType || undefined,
-                    'content-length': chunkSize,
-                    "content-range": `bytes ${start}-${end}/${fileStat.size}`
-                });
-                return res.end();
+                if (!res.writableEnded) {
+                    res.end();
+                }
+                return;
             }
             else {
                 await new Promise((resolve, reject) => {
@@ -104,7 +107,8 @@ export class WebdavServer {
                 const contentType = mime.lookup(filePath);
                 setHeader(res, {
                     'content-type': contentType || undefined,
-                    'content-length': fileStat.size
+                    'content-length': fileStat.size,
+                    'accept-ranges': 'bytes'
                 });
             }
             res.statusCode = 200;
