@@ -56,43 +56,33 @@ export class WebdavServer {
                     return res.end();
                 }
                 const chunkSize = end - start + 1;
-                try {
-                    await new Promise((resolve, reject) => {
-                        const fileStream = fs.createReadStream(filePath, { start, end });
-                        fileStream.on('end', resolve);
-                        fileStream.on('error', reject);
-                        fileStream.pipe(res);
-                    });
-                    res.statusCode = 206;
-                    setHeader(res, {
-                        'accept-ranges': 'bypes',
-                        'content-type': contentType || undefined,
-                        'content-length': chunkSize,
-                        "content-range": `bytes ${start}-${end}/${fileStat.size}`
-                    });
-                }
-                catch {
-                    res.statusCode = 500;
-                }
+                await new Promise((resolve, reject) => {
+                    const fileStream = fs.createReadStream(filePath, { start, end });
+                    fileStream.on('end', resolve);
+                    fileStream.on('error', reject);
+                    fileStream.pipe(res);
+                });
+                res.statusCode = 206;
+                setHeader(res, {
+                    'accept-ranges': 'bypes',
+                    'content-type': contentType || undefined,
+                    'content-length': chunkSize,
+                    "content-range": `bytes ${start}-${end}/${fileStat.size}`
+                });
                 return res.end();
             }
             else {
-                try {
-                    await new Promise((resolve, reject) => {
-                        const fileStream = fs.createReadStream(filePath);
-                        fileStream.on('end', resolve);
-                        fileStream.on('error', reject);
-                        fileStream.pipe(res);
-                    });
-                    res.statusCode = 200;
-                    setHeader(res, {
-                        'content-type': contentType || undefined,
-                        'content-length': fileStat.size
-                    });
-                }
-                catch {
-                    res.statusCode = 500;
-                }
+                await new Promise((resolve, reject) => {
+                    const fileStream = fs.createReadStream(filePath);
+                    fileStream.on('end', resolve);
+                    fileStream.on('error', reject);
+                    fileStream.pipe(res);
+                });
+                res.statusCode = 200;
+                setHeader(res, {
+                    'content-type': contentType || undefined,
+                    'content-length': fileStat.size
+                });
                 return res.end();
             }
         },
@@ -173,25 +163,17 @@ export class WebdavServer {
                 res.statusCode = 404;
                 return res.end();
             }
-            try {
-                res.statusCode = 207;
-                setHeader(res, {
-                    'Content-type': 'application/xml; charset="utf-8"',
-                    'dav': '1'
-                });
-                const responseXML = createPropfindXML({
-                    servicePath: reqPath,
-                    depth,
-                    server
-                });
-                return res.end(responseXML);
-            }
-            catch (err) {
-                res.statusCode = 500;
-                res.write('<?xml version="1.0"?><error>500 Internal Server Error</error>');
-                console.log(err);
-                return res.end();
-            }
+            res.statusCode = 207;
+            setHeader(res, {
+                'Content-type': 'application/xml; charset="utf-8"',
+                'dav': '1'
+            });
+            const responseXML = createPropfindXML({
+                servicePath: reqPath,
+                depth,
+                server
+            });
+            return res.end(responseXML);
         },
         async delete(req, res, server) {
             const reqPath = getReqPath(req);
@@ -469,7 +451,7 @@ export class WebdavServer {
                 return res.end();
             }
             catch (err) {
-                console.log(err);
+                console.error(err);
                 res.statusCode = 500;
                 return res.end();
             }
