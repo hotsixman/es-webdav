@@ -1,0 +1,1 @@
+{"version":3,"file":"propfind.d.ts","sourceRoot":"","sources":["../../../module/xml/propfind.ts"],"names":[],"mappings":"AAKA,OAAO,EAAE,YAAY,EAAE,MAAM,qBAAqB,CAAC;AAGnD,wBAAgB,iBAAiB,CAAC,EAAE,MAAM,EAAE,WAAW,EAAE,KAAK,EAAE,EAAE,YAAY,UA6B7E;AAiKD,UAAU,YAAY;IAClB,WAAW,EAAE,MAAM,CAAC;IACpB,KAAK,CAAC,EAAE,CAAC,GAAG,CAAC,CAAC;IACd,MAAM,EAAE,YAAY,CAAC;CACxB"}

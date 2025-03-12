@@ -1,0 +1,1 @@
+{"version":3,"file":"expected-error.js","sourceRoot":"","sources":["../../module/expected-error.ts"],"names":[],"mappings":"AAAA,MAAM,OAAO,aAAc,SAAQ,KAAK;IACpC,IAAI,CAAS;IACb,YAAY,IAAY,EAAE,GAAY;QAClC,KAAK,CAAC,GAAG,CAAC,CAAC;QACX,IAAI,CAAC,IAAI,GAAG,IAAI,CAAC;IACrB,CAAC;CACJ"}

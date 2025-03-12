@@ -1,0 +1,25 @@
+import { Http2ServerRequest, Http2ServerResponse, OutgoingHttpHeaders } from "node:http2";
+import { WebdavServer } from "./webdav-server.js";
+import * as fs from 'node:fs';
+export declare function setHeader(res: Http2ServerResponse, header: OutgoingHttpHeaders | Record<string, string | number | string[] | undefined>): void;
+export declare function joinPath(...args: string[]): string;
+export declare function resolvePath(...args: string[]): string;
+export declare function getParentPath(pathname: string): string;
+export declare function slash(path: string): string;
+export declare function writeFile(req: Http2ServerRequest, filePath: string): Promise<void>;
+export declare function encodePath(path: string): string;
+export declare function decodePath(path: string): string;
+export declare function pipe(value: any, funcArr: ((arg: any) => any)[]): any;
+export declare function asyncPipe(value: any, funcArr: ((arg: any) => any | Promise<any>)[]): Promise<any>;
+export declare function rmDirectory(reqPath: string, server: WebdavServer): string[];
+export declare function escapeRegexp(string: string): string;
+export declare function getEtag(fileStat: fs.Stats): string;
+export declare function isChildPath(parentPath: string, childPath: string): boolean;
+export declare function isSamePath(path1: string, path2: string): boolean;
+export declare function getReqPath(req: Http2ServerRequest): string;
+export declare function getLockToken(req: Http2ServerRequest): string | string[];
+export declare function getTimeout(req: Http2ServerRequest): number | null;
+export declare function getDepth(req: Http2ServerRequest): number;
+export declare function lockPath(servicePath: string, server: WebdavServer, depth: number, timeout?: number | null, lockToken?: string): string | null;
+export declare function getAuth(req: Http2ServerRequest): [string, string] | null;
+//# sourceMappingURL=func.d.ts.map
