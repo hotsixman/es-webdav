@@ -47,7 +47,7 @@ export class WebdavServer {
             const range = req.headers.range;
             if (range) {
                 const rangePart = range.replace('bytes=', '').trim().split(',')[0].trim();
-                const [start, end] = rangePart.split('-').map(parseInt);
+                const [start, end] = rangePart.split('-').map((e) => parseInt(e));
                 if (start < 0 || start >= fileStat.size || end < 0 || end >= fileStat.size) {
                     res.statusCode = 416;
                     setHeader(res, {
@@ -262,6 +262,7 @@ export class WebdavServer {
                 }
             }
             fs.renameSync(originSourcePath, destinationFilePath);
+            res.statusCode = 200;
             return res.end();
         },
         async mkcol(req, res, server) {

@@ -66,7 +66,7 @@ export class WebdavServer {
             const range = req.headers.range;
             if (range) { // range 헤더가 있는 경우
                 const rangePart = range.replace('bytes=', '').trim().split(',')[0].trim();
-                const [start, end] = rangePart.split('-').map(parseInt);
+                const [start, end] = rangePart.split('-').map((e) => parseInt(e));
 
                 /*
                 올바르지 않은 범위
@@ -406,7 +406,7 @@ export class WebdavServer {
             }
 
             fs.renameSync(originSourcePath, destinationFilePath);
-
+            res.statusCode = 200;
             return res.end();
         },
         async mkcol(req, res, server) {
