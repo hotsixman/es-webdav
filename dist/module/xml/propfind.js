@@ -21,7 +21,7 @@ export function createPropfindXML({ server, servicePath, depth }) {
                 }
                 const DResponse = createDResponse({
                     server,
-                    servicePath: virtualPath
+                    servicePath: joinPath(server.option.davRootPath, virtualPath)
                 });
                 DMultistatus.appendChild(DResponse);
             });
