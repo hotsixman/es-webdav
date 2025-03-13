@@ -1,0 +1,116 @@
+<html>
+
+<head>
+    <meta charset="UTF-8" />
+</head>
+
+<body>
+    <div class="container" id="container"></div>
+    <script>
+        async function main() {
+            /** @type {HTMLDivElement | null} */
+            const container = document.querySelector('#container');
+            if (!container) return;
+
+            const path = getPath();
+            if (!path) {
+                container.innerText = 'Error 404';
+                return;
+            }
+
+            // propfind
+            const propfindResponse = await sendPropfindRequest(path);
+            if (!propfindResponse.status.toString().startsWith('2')) {
+                container.innerText = `Error ${propfindResponse.status}`;
+                return;
+            }
+
+            const propfindResponseBody = await propfindResponse.text();
+            const propfindData = parsePropfind(propfindResponseBody);
+
+            console.log(propfindData);
+            if(!propfindData.data.isCollection){
+                location.href = propfindData.data.href;
+            }
+        }
+
+        main();
+
+        function getPath() {
+            return new URLSearchParams(location.search).get('path')
+        }
+
+        /**
+         * @param {string} path
+         */
+        function getUpperPath(path) {
+            if (path.endsWith('/')) path = path.slice(0, -1);
+
+            const splited = path.split('/');
+
+            return splited.filter((_, i, a) => i < a.length - 1).join('/');
+        }
+
+        function parsePropfind(xml) {
+            const propfindXML = new DOMParser().parseFromString(xml, 'application/xml');
+            const multistatusElement = propfindXML.getElementsByTagNameNS("DAV:", "multistatus")[0];
+
+            const [response, ...childrenResponses] = multistatusElement.getElementsByTagNameNS("DAV:", "response");
+
+            const data = {
+                href: '',
+                displayname: '',
+                isCollection: false,
+                creationDate: null,
+            };
+            data.href = response?.getElementsByTagNameNS("DAV:", "href")[0]?.textContent;
+            const prop = response.getElementsByTagNameNS("DAV:", "prop")[0];
+            data.displayname = prop?.getElementsByTagNameNS("DAV:", "displayname")?.[0]?.textContent;
+            data.isCollection = prop?.getElementsByTagNameNS("DAV:", "resourcetype")?.[0]
+                ?.getElementsByTagNameNS("DAV:", "collection")?.[0]
+                ? true : false;
+            data.creationDate = prop?.getElementsByTagNameNS("DAV:", "creationdate")?.[0]?.textContent ?? null;
+
+            const children = [];
+            childrenResponses.forEach((response) => {
+                const data = {
+                    href: '',
+                    displayname: '',
+                    isCollection: false,
+                    creationDate: null,
+                };
+                data.href = response?.getElementsByTagNameNS("DAV:", "href")[0]?.textContent;
+                const prop = response.getElementsByTagNameNS("DAV:", "prop")[0];
+                data.displayname = prop?.getElementsByTagNameNS("DAV:", "displayname")?.[0]?.textContent;
+                data.isCollection = prop?.getElementsByTagNameNS("DAV:", "resourcetype")?.[0]
+                    ?.getElementsByTagNameNS("DAV:", "collection")?.[0]
+                    ? true : false;
+                data.creationDate = prop?.getElementsByTagNameNS("DAV:", "creationdate")?.[0]?.textContent ?? null;
+                children.push(data)
+            })
+
+            return { data, children }
+        }
+
+        async function sendHeadRequest(path) {
+            const response = await fetch(path, {
+                method: 'HEAD'
+            });
+
+            return response;
+        }
+
+        async function sendPropfindRequest(path) {
+            const response = await fetch(path, {
+                method: 'PROPFIND',
+                headers: {
+                    'depth': '1'
+                }
+            });
+
+            return response;
+        }
+    </script>
+</body>
+
+</html>

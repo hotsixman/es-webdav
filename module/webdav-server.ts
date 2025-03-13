@@ -93,8 +93,8 @@ export class WebdavServer {
                 res.statusCode = 206;
                 setHeader(res, {
                     'accept-ranges': 'bytes',
-                    'content-type': contentType || undefined,
-                    'content-length': chunkSize,
+                    'content-type': contentType ? contentType + (contentType.startsWith('text') ? '; charset="utf-8"' : '') : "application/octet-stream",
+                    'Content-Length': chunkSize,
                     "content-range": `bytes ${start}-${end}/${fileStat.size}`
                 });
                 await new Promise<void>((resolve, reject) => {
@@ -103,16 +103,13 @@ export class WebdavServer {
                     fileStream.on('error', reject);
                     fileStream.pipe(res);
                 });
-                if (!res.writableEnded) {
-                    res.end();
-                }
-                return;
+                return res.end();
             }
             else { // range 헤더가 없는 경우
                 res.statusCode = 200;
                 setHeader(res, {
-                    'content-type': contentType || undefined,
-                    'content-length': fileStat.size,
+                    'content-type': contentType ? contentType + (contentType.startsWith('text') ? '; charset="utf-8"' : '') : "application/octet-stream",
+                    'Content-Length': fileStat.size,
                     'accept-ranges': 'bytes',
                 });
                 await new Promise<void>((resolve, reject) => {
@@ -121,10 +118,7 @@ export class WebdavServer {
                     fileStream.on('error', reject);
                     fileStream.pipe(res);
                 })
-                if (!res.writableEnded) {
-                    res.end();
-                }
-                return;
+                return res.end();
             }
         },
         async head(req, res, server) {
@@ -749,9 +743,9 @@ export class WebdavServer {
     }
 }
 
-type RequestHandler = (req: http2.Http2ServerRequest, res: http2.Http2ServerResponse, server: WebdavServer) => any | Promise<any>;
+export type RequestHandler = (req: http2.Http2ServerRequest, res: http2.Http2ServerResponse, server: WebdavServer) => any | Promise<any>;
 
-interface WebdavServerOption {
+export interface WebdavServerOption {
     version: 'http' | 'http2';
     port: number;
     middlewares?: RequestHandler[];
