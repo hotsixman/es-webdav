@@ -112,7 +112,14 @@ export function getReqPath(req) {
     if (reqPath !== "/" && reqPath.endsWith('/')) {
         reqPath = reqPath.slice(0, -1);
     }
+    if (reqPath.includes('?')) {
+        reqPath = reqPath.split('?')[0];
+    }
     return reqPath;
+}
+export function getReqParam(req) {
+    let reqPath = decodePath(req.url);
+    return new URLSearchParams(reqPath.split('?')[1] ?? '');
 }
 export function getLockToken(req) {
     let lockToken = req.headers['lock-token'];

@@ -10,6 +10,7 @@ import { createLockXML } from "./xml/lock.js";
 import { ExpectedError } from "./expected-error.js";
 import { AuthManager } from "./manager/auth-manager.js";
 import { extname } from "node:path";
+import { pipeline } from "node:stream/promises";
 function getHttp(version) {
     if (version === "http") {
         return http1;
@@ -69,38 +70,22 @@ export class WebdavServer {
                 res.statusCode = 206;
                 setHeader(res, {
                     'accept-ranges': 'bytes',
-                    'content-type': contentType || undefined,
-                    'content-length': chunkSize,
+                    'content-type': contentType ? contentType + (contentType.startsWith('text') ? '; charset="utf-8"' : '') : "application/octet-stream",
+                    'Content-Length': chunkSize,
                     "content-range": `bytes ${start}-${end}/${fileStat.size}`
                 });
-                await new Promise((resolve, reject) => {
-                    const fileStream = fs.createReadStream(filePath, { start, end });
-                    fileStream.on('end', resolve);
-                    fileStream.on('error', reject);
-                    fileStream.pipe(res);
-                });
-                if (!res.writableEnded) {
-                    res.end();
-                }
-                return;
+                await pipeline(fs.createReadStream(filePath, { start, end }), res);
+                return res.end();
             }
             else {
                 res.statusCode = 200;
                 setHeader(res, {
-                    'content-type': contentType || undefined,
-                    'content-length': fileStat.size,
+                    'content-type': contentType ? contentType + (contentType.startsWith('text') ? '; charset="utf-8"' : '') : "application/octet-stream",
+                    'Content-Length': fileStat.size,
                     'accept-ranges': 'bytes',
                 });
-                await new Promise((resolve, reject) => {
-                    const fileStream = fs.createReadStream(filePath);
-                    fileStream.on('end', resolve);
-                    fileStream.on('error', reject);
-                    fileStream.pipe(res);
-                });
-                if (!res.writableEnded) {
-                    res.end();
-                }
-                return;
+                await pipeline(fs.createReadStream(filePath), res);
+                return res.end();
             }
         },
         async head(req, res, server) {

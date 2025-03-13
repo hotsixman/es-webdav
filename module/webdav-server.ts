@@ -10,6 +10,7 @@ import { createLockXML } from "./xml/lock.js";
 import { ExpectedError } from "./expected-error.js";
 import { AuthInterface, AuthManager } from "./manager/auth-manager.js";
 import { extname } from "node:path";
+import { pipeline } from "node:stream/promises";
 
 function getHttp(version: 'http' | 'http2') {
     if (version === "http") {
@@ -97,12 +98,7 @@ export class WebdavServer {
                     'Content-Length': chunkSize,
                     "content-range": `bytes ${start}-${end}/${fileStat.size}`
                 });
-                await new Promise<void>((resolve, reject) => {
-                    const fileStream = fs.createReadStream(filePath, { start, end });
-                    fileStream.on('end', resolve);
-                    fileStream.on('error', reject);
-                    fileStream.pipe(res);
-                });
+                await pipeline(fs.createReadStream(filePath, { start, end }), res);
                 return res.end();
             }
             else { // range 헤더가 없는 경우
@@ -112,12 +108,7 @@ export class WebdavServer {
                     'Content-Length': fileStat.size,
                     'accept-ranges': 'bytes',
                 });
-                await new Promise<void>((resolve, reject) => {
-                    const fileStream = fs.createReadStream(filePath);
-                    fileStream.on('end', resolve);
-                    fileStream.on('error', reject);
-                    fileStream.pipe(res);
-                })
+                await pipeline(fs.createReadStream(filePath), res)
                 return res.end();
             }
         },

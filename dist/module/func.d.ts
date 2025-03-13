@@ -17,6 +17,7 @@ export declare function getEtag(fileStat: fs.Stats): string;
 export declare function isChildPath(parentPath: string, childPath: string): boolean;
 export declare function isSamePath(path1: string, path2: string): boolean;
 export declare function getReqPath(req: Http2ServerRequest): string;
+export declare function getReqParam(req: Http2ServerRequest): URLSearchParams;
 export declare function getLockToken(req: Http2ServerRequest): string | string[];
 export declare function getTimeout(req: Http2ServerRequest): number | null;
 export declare function getDepth(req: Http2ServerRequest): number;

@@ -14,8 +14,8 @@ export declare class WebdavServer {
     getServicePath(sourcePath: string): string;
     listen(callback?: () => void): void;
 }
-type RequestHandler = (req: http2.Http2ServerRequest, res: http2.Http2ServerResponse, server: WebdavServer) => any | Promise<any>;
-interface WebdavServerOption {
+export type RequestHandler = (req: http2.Http2ServerRequest, res: http2.Http2ServerResponse, server: WebdavServer) => any | Promise<any>;
+export interface WebdavServerOption {
     version: 'http' | 'http2';
     port: number;
     middlewares?: RequestHandler[];
@@ -25,5 +25,4 @@ interface WebdavServerOption {
     lockManager?: ResourceLockInterface;
     authManager?: AuthInterface;
 }
-export {};
 //# sourceMappingURL=webdav-server.d.ts.map
