@@ -1,0 +1,254 @@
+<html>
+
+<head>
+    <meta charset="UTF-8" />
+    <style>
+        table{
+            max-width: 100%;
+        }
+        th{
+            text-align: left;
+        }
+        .th-icon{
+            width: 20px;
+        }
+        .th-title{
+            min-width: 250px;
+            overflow-wrap: anywhere;word-wrap: break-word;
+        }
+        .th-date{
+            width: 230px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="upper" id="upper"></div>
+    <div class="container" id="container"></div>
+    <script>
+        async function main() {
+            /** @type {HTMLDivElement | null} */
+            const container = document.querySelector('#container');
+            const upper = document.querySelector('#upper');
+            if (!container || !upper) return;
+
+            const path = getPath();
+            if (!path) {
+                container.innerText = 'Error 404';
+                return;
+            }
+
+            // propfind
+            const propfindResponse = await sendPropfindRequest(path);
+            if (!propfindResponse.status.toString().startsWith('2')) {
+                container.innerText = `Error ${propfindResponse.status}`;
+                return;
+            }
+
+            const propfindResponseBody = await propfindResponse.text();
+            const propfindData = parsePropfind(propfindResponseBody);
+
+            if (!propfindData.data.isCollection) {
+                location.href = propfindData.data.href;
+                return;
+            }
+
+            const upperLink = document.createElement('a');
+            console.log(getUpperPath(propfindData.data.href), propfindData.data.href);
+            upperLink.href = `/viewer?path=${encodeURIComponent(getUpperPath(propfindData.data.href))}`;
+            upperLink.innerText = "📁 .."
+            upper.appendChild(upperLink);
+            showChild(propfindData.children, container, "name", "asc")
+        }
+
+        main();
+
+        function getPath() {
+            return new URLSearchParams(location.search).get('path')
+        }
+
+        /**
+         * @param {string} path
+         */
+        function getUpperPath(path) {
+            if (path.endsWith('/')) path = path.slice(0, -1);
+
+            const splited = path.split('/');
+
+            return splited.filter((_, i, a) => i < a.length - 1).join('/');
+        }
+
+        function parsePropfind(xml) {
+            const propfindXML = new DOMParser().parseFromString(xml, 'application/xml');
+            const multistatusElement = propfindXML.getElementsByTagNameNS("DAV:", "multistatus")[0];
+
+            const [response, ...childrenResponses] = multistatusElement.getElementsByTagNameNS("DAV:", "response");
+
+            const data = {
+                href: '',
+                displayname: '',
+                isCollection: false,
+                creationDate: null,
+            };
+            data.href = response?.getElementsByTagNameNS("DAV:", "href")[0]?.textContent;
+            const prop = response.getElementsByTagNameNS("DAV:", "prop")[0];
+            data.displayname = prop?.getElementsByTagNameNS("DAV:", "displayname")?.[0]?.textContent;
+            data.isCollection = prop?.getElementsByTagNameNS("DAV:", "resourcetype")?.[0]
+                ?.getElementsByTagNameNS("DAV:", "collection")?.[0]
+                ? true : false;
+            data.creationDate = prop?.getElementsByTagNameNS("DAV:", "creationdate")?.[0]?.textContent ?? null;
+
+            const children = [];
+            childrenResponses.forEach((response) => {
+                const data = {
+                    href: '',
+                    displayname: '',
+                    isCollection: false,
+                    creationDate: null,
+                };
+                data.href = response?.getElementsByTagNameNS("DAV:", "href")[0]?.textContent;
+                const prop = response.getElementsByTagNameNS("DAV:", "prop")[0];
+                data.displayname = prop?.getElementsByTagNameNS("DAV:", "displayname")?.[0]?.textContent;
+                data.isCollection = prop?.getElementsByTagNameNS("DAV:", "resourcetype")?.[0]
+                    ?.getElementsByTagNameNS("DAV:", "collection")?.[0]
+                    ? true : false;
+                data.creationDate = prop?.getElementsByTagNameNS("DAV:", "creationdate")?.[0]?.textContent ?? null;
+                children.push(data)
+            })
+
+            return { data, children }
+        }
+
+        function showChild(children, container, sortBy, sortOrder) {
+            container.innerHTML = '';
+            /** @type {Array} */
+            let sortedChildren;
+            switch (sortBy) {
+                case ('name'): {
+                    sortedChildren = children.toSorted((a, b) => a.displayname.localeCompare(b.displayname));
+                    break
+                }
+                case ('date'): {
+                    sortedChildren = children.toSorted((a, b) => new Date(a.creationDate) - new Date(b.creationDate));
+                    break
+                }
+                default: {
+                    sortedChildren = children;
+                }
+            }
+            if (sortOrder == "desc") {
+                sortedChildren = sortedChildren.toReversed();
+            }
+            sortedChildren = sortedChildren.toSorted((a, b) => {
+                let aStatus = a.isCollection ? 0 : 1;
+                let bStatus = b.isCollection ? 0 : 1;
+                return aStatus - bStatus;
+            })
+
+            const table = document.createElement('table');
+            const thead = document.createElement('thead');
+            const tbody = document.createElement('tbody');
+            table.appendChild(thead);
+            table.appendChild(tbody);
+
+            thead.innerHTML = `<tr><th class="th-icon"></th><th class="th-title">Title</th><th class="th-date">Creation Date</th></tr>`;
+            thead.querySelector('.th-title')?.addEventListener('click', () => {
+                if (sortBy === "name") {
+                    if (sortOrder === "asc") {
+                        showChild(children, container, sortBy, "desc")
+                    }
+                    else {
+                        showChild(children, container, sortBy, "asc")
+
+                    }
+                }
+                else {
+                    showChild(children, container, "name", "asc")
+                }
+            })
+            thead.querySelector('.th-date')?.addEventListener('click', () => {
+                if (sortBy === "date") {
+                    if (sortOrder === "asc") {
+                        showChild(children, container, sortBy, "desc")
+                    }
+                    else {
+                        showChild(children, container, sortBy, "asc")
+
+                    }
+                }
+                else {
+                    showChild(children, container, "date", "asc")
+                }
+            })
+            if (sortBy === "name") {
+                const title = thead.querySelector('.th-title')
+                if (title) {
+                    title.classList.add('em');
+                }
+            }
+            else {
+                const date = thead.querySelector('.th-date')
+                if (date) {
+                    title.classList.add('em');
+                }
+
+            }
+
+            sortedChildren.forEach((child) => {
+                const tr = document.createElement('tr');
+
+                const icon = document.createElement('td');
+                icon.classList.add('td-icon');
+                if (child.isCollection) {
+                    icon.innerText = '📁';
+                }
+                else {
+                    icon.innerText = '📄';
+                }
+                tr.appendChild(icon);
+
+                const title = document.createElement('td');
+                title.classList.add('td-title');
+                const link = document.createElement('a');
+                if (child.isCollection) {
+                    link.href = `/viewer?path=${encodeURIComponent(child.href)}`;
+                }
+                else {
+                    link.href = child.href;
+                }
+                link.innerText = child.displayname;
+                title.append(link);
+                tr.append(title);
+
+                const date = document.createElement('td');
+                date.classList.add('td-date');
+                date.innerText = new Date(child.creationDate).toLocaleString();
+                tr.appendChild(date);
+
+                tbody.appendChild(tr);
+            })
+            container.appendChild(table);
+        }
+
+        async function sendHeadRequest(path) {
+            const response = await fetch(path, {
+                method: 'HEAD'
+            });
+
+            return response;
+        }
+
+        async function sendPropfindRequest(path) {
+            const response = await fetch(path, {
+                method: 'PROPFIND',
+                headers: {
+                    'depth': '1'
+                }
+            });
+
+            return response;
+        }
+    </script>
+</body>
+
+</html>
