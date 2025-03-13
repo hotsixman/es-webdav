@@ -9,6 +9,7 @@ import { ResourceLockManager } from "./manager/resource-lock-manager.js";
 import { createLockXML } from "./xml/lock.js";
 import { ExpectedError } from "./expected-error.js";
 import { AuthManager } from "./manager/auth-manager.js";
+import { extname } from "node:path";
 function getHttp(version) {
     if (version === "http") {
         return http1;
@@ -43,11 +44,20 @@ export class WebdavServer {
                 res.write('Not found.');
                 return res.end();
             }
-            const contentType = mime.lookup(filePath);
+            const contentType = mime.lookup(extname(filePath));
             const range = req.headers.range;
             if (range) {
                 const rangePart = range.replace('bytes=', '').trim().split(',')[0].trim();
-                const [start, end] = rangePart.split('-').map((e) => parseInt(e));
+                const [start, end] = rangePart.split('-').map((e, i, a) => {
+                    if (e.length === 0) {
+                        if (i === 0)
+                            return 0;
+                        return fileStat.size - 1;
+                    }
+                    else {
+                        return parseInt(e);
+                    }
+                });
                 if (start < 0 || start >= fileStat.size || end < 0 || end >= fileStat.size) {
                     res.statusCode = 416;
                     setHeader(res, {
@@ -75,18 +85,22 @@ export class WebdavServer {
                 return;
             }
             else {
+                res.statusCode = 200;
+                setHeader(res, {
+                    'content-type': contentType || undefined,
+                    'content-length': fileStat.size,
+                    'accept-ranges': 'bytes',
+                });
                 await new Promise((resolve, reject) => {
                     const fileStream = fs.createReadStream(filePath);
                     fileStream.on('end', resolve);
                     fileStream.on('error', reject);
                     fileStream.pipe(res);
                 });
-                res.statusCode = 200;
-                setHeader(res, {
-                    'content-type': contentType || undefined,
-                    'content-length': fileStat.size
-                });
-                return res.end();
+                if (!res.writableEnded) {
+                    res.end();
+                }
+                return;
             }
         },
         async head(req, res, server) {
@@ -104,7 +118,7 @@ export class WebdavServer {
                 });
             }
             else {
-                const contentType = mime.lookup(filePath);
+                const contentType = mime.lookup(extname(filePath));
                 setHeader(res, {
                     'content-type': contentType || undefined,
                     'content-length': fileStat.size,
@@ -198,17 +212,25 @@ export class WebdavServer {
             }
             const fileStat = fs.statSync(filePath);
             if (fileStat.isDirectory()) {
-                const removedPaths = rmDirectory(reqPath, server);
-                const responseXML = createDeleteXML(removedPaths);
                 res.statusCode = 207;
                 setHeader(res, {
                     'Content-type': 'application/xml; charset="utf-8"'
                 });
+                const interval = setInterval(() => {
+                    res.write("0");
+                }, 1000 * 10);
+                const removedPaths = rmDirectory(reqPath, server);
+                const responseXML = createDeleteXML(removedPaths);
+                clearInterval(interval);
                 return res.end(responseXML);
             }
             else {
-                fs.rmSync(filePath);
                 res.statusCode = 204;
+                const interval = setInterval(() => {
+                    res.write("0");
+                }, 1000 * 10);
+                fs.rmSync(filePath);
+                clearInterval(interval);
                 return res.end();
             }
         },
@@ -265,8 +287,12 @@ export class WebdavServer {
                     return res.end();
                 }
             }
-            fs.renameSync(originSourcePath, destinationFilePath);
             res.statusCode = 200;
+            const interval = setInterval(() => {
+                res.write("0");
+            }, 1000 * 10);
+            fs.renameSync(originSourcePath, destinationFilePath);
+            clearInterval(interval);
             return res.end();
         },
         async mkcol(req, res, server) {
@@ -340,19 +366,17 @@ export class WebdavServer {
                     return res.end();
                 }
             }
-            const originStream = fs.createReadStream(originSourcePath);
-            const destinationStream = fs.createWriteStream(destinationFilePath);
-            await new Promise((res, rej) => {
-                originStream.on('end', res);
-                originStream.on('error', rej);
-                originStream.pipe(destinationStream);
-            });
             if (destinationAlreadyExists) {
                 res.statusCode = 204;
             }
             else {
                 res.statusCode = 201;
             }
+            const interval = setInterval(() => {
+                res.write("0");
+            }, 1000 * 10);
+            fs.copyFileSync(originSourcePath, destinationFilePath);
+            clearInterval(interval);
             return res.end();
         },
         async lock(req, res, server) {
@@ -509,8 +533,8 @@ export class WebdavServer {
         reqPath = joinPath('/dav', reqPath);
         return reqPath;
     }
-    listen() {
-        this.httpServer.listen(this.option.port);
+    listen(callback) {
+        this.httpServer.listen(this.option.port, callback);
     }
 }
 //# sourceMappingURL=webdav-server.js.map

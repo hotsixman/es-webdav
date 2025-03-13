@@ -1,4 +1,5 @@
 import { ExpectedError } from "../expected-error.js";
+import { DB } from 'johnson-db';
 
 export interface AuthInterface {
     isRegistered(user: string): Promise<boolean>;
@@ -20,6 +21,14 @@ export interface AuthInterface {
 
 export class AuthManager implements AuthInterface {
     userMap = new Map<string, string>();
+    db = new DB<{ user: string; password: string; }>('db/auth');
+
+    constructor() {
+        // load db
+        Object.values(this.db.select().run({ async: false })).forEach(({ user, password }) => {
+            this.userMap.set(user, password);
+        })
+    }
 
     async isRegistered(user: string): Promise<boolean> {
         return this.userMap.has(user);
@@ -31,6 +40,7 @@ export class AuthManager implements AuthInterface {
         }
 
         this.userMap.set(user, password);
+        this.db.insert({ user, password });
     }
 
     async changePassword(user: string, newPassword: string): Promise<void> {
@@ -39,6 +49,7 @@ export class AuthManager implements AuthInterface {
         }
 
         this.userMap.set(user, newPassword);
+        this.db.update().where((data) => data.user === user).to((data) => ({ ...data, password: newPassword })).run({ async: false })
     }
 
     async deleteUser(user: string): Promise<void> {
@@ -47,6 +58,7 @@ export class AuthManager implements AuthInterface {
         }
 
         this.userMap.delete(user);
+        this.db.delete().where((data) => data.user === user).run({ async: false })
     }
 
     async tryLogin(user: string, password: string): Promise<boolean> {
@@ -56,7 +68,7 @@ export class AuthManager implements AuthInterface {
 
         const userPassword = await this.getPassword(user);
 
-        if(!userPassword){
+        if (!userPassword) {
             return false;
         }
 
@@ -64,7 +76,7 @@ export class AuthManager implements AuthInterface {
     }
 
     async getPassword(user: string): Promise<string | null> {
-        if(!(await this.isRegistered(user))){
+        if (!(await this.isRegistered(user))) {
             return null;
         }
 

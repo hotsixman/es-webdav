@@ -12,7 +12,7 @@ export declare class WebdavServer {
     constructor(option?: Partial<WebdavServerOption>);
     getSourcePath(reqPath: string): string;
     getServicePath(sourcePath: string): string;
-    listen(): void;
+    listen(callback?: () => void): void;
 }
 type RequestHandler = (req: http2.Http2ServerRequest, res: http2.Http2ServerResponse, server: WebdavServer) => any | Promise<any>;
 interface WebdavServerOption {

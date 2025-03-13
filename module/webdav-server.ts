@@ -9,6 +9,7 @@ import { ResourceLockInterface, ResourceLockManager } from "./manager/resource-l
 import { createLockXML } from "./xml/lock.js";
 import { ExpectedError } from "./expected-error.js";
 import { AuthInterface, AuthManager } from "./manager/auth-manager.js";
+import { extname } from "node:path";
 
 function getHttp(version: 'http' | 'http2') {
     if (version === "http") {
@@ -61,12 +62,20 @@ export class WebdavServer {
             /*
             contentType 헤더 준비
             */
-            const contentType = mime.lookup(filePath);
+            const contentType = mime.lookup(extname(filePath));
 
             const range = req.headers.range;
             if (range) { // range 헤더가 있는 경우
                 const rangePart = range.replace('bytes=', '').trim().split(',')[0].trim();
-                const [start, end] = rangePart.split('-').map((e) => parseInt(e));
+                const [start, end] = rangePart.split('-').map((e, i, a) => {
+                    if (e.length === 0) {
+                        if (i === 0) return 0;
+                        return fileStat.size - 1;
+                    }
+                    else {
+                        return parseInt(e)
+                    }
+                });
 
                 /*
                 올바르지 않은 범위
@@ -80,8 +89,7 @@ export class WebdavServer {
                 }
 
                 const chunkSize = end - start + 1;
-                
-                
+
                 res.statusCode = 206;
                 setHeader(res, {
                     'accept-ranges': 'bytes',
@@ -95,25 +103,28 @@ export class WebdavServer {
                     fileStream.on('error', reject);
                     fileStream.pipe(res);
                 });
-                if(!res.writableEnded){
+                if (!res.writableEnded) {
                     res.end();
                 }
                 return;
             }
             else { // range 헤더가 없는 경우
+                res.statusCode = 200;
+                setHeader(res, {
+                    'content-type': contentType || undefined,
+                    'content-length': fileStat.size,
+                    'accept-ranges': 'bytes',
+                });
                 await new Promise<void>((resolve, reject) => {
                     const fileStream = fs.createReadStream(filePath);
                     fileStream.on('end', resolve);
                     fileStream.on('error', reject);
                     fileStream.pipe(res);
                 })
-                res.statusCode = 200;
-                setHeader(res, {
-                    'content-type': contentType || undefined,
-                    'content-length': fileStat.size
-                });
-
-                return res.end();
+                if (!res.writableEnded) {
+                    res.end();
+                }
+                return;
             }
         },
         async head(req, res, server) {
@@ -140,7 +151,7 @@ export class WebdavServer {
                 })
             }
             else {
-                const contentType = mime.lookup(filePath);
+                const contentType = mime.lookup(extname(filePath));
                 setHeader(res, {
                     'content-type': contentType || undefined,
                     'content-length': fileStat.size,
@@ -294,12 +305,16 @@ export class WebdavServer {
                 폴더를 삭제하는 경우
                 해당 폴더와 모든 하위 리소스를 삭제하고 그 경로를 XML로 만들어 207 응답
                 */
-                const removedPaths = rmDirectory(reqPath, server);
-                const responseXML = createDeleteXML(removedPaths);
                 res.statusCode = 207;
                 setHeader(res, {
                     'Content-type': 'application/xml; charset="utf-8"'
                 })
+                const interval = setInterval(() => {
+                    res.write("0")
+                }, 1000 * 10);
+                const removedPaths = rmDirectory(reqPath, server);
+                const responseXML = createDeleteXML(removedPaths);
+                clearInterval(interval);
                 return res.end(responseXML);
             }
             else {
@@ -307,8 +322,12 @@ export class WebdavServer {
                 파일을 삭제해는 경우
                 해당 파일만 삭제하고 204 응답
                 */
-                fs.rmSync(filePath);
                 res.statusCode = 204;
+                const interval = setInterval(() => {
+                    res.write("0")
+                }, 1000 * 10);
+                fs.rmSync(filePath);
+                clearInterval(interval);
                 return res.end();
             }
         },
@@ -409,8 +428,12 @@ export class WebdavServer {
                 }
             }
 
-            fs.renameSync(originSourcePath, destinationFilePath);
             res.statusCode = 200;
+            const interval = setInterval(() => {
+                res.write("0")
+            }, 1000 * 10);
+            fs.renameSync(originSourcePath, destinationFilePath);
+            clearInterval(interval);
             return res.end();
         },
         async mkcol(req, res, server) {
@@ -513,20 +536,17 @@ export class WebdavServer {
                 }
             }
 
-            const originStream = fs.createReadStream(originSourcePath);
-            const destinationStream = fs.createWriteStream(destinationFilePath);
-            await new Promise<void>((res, rej) => {
-                originStream.on('end', res);
-                originStream.on('error', rej);
-                originStream.pipe(destinationStream);
-            });
-
             if (destinationAlreadyExists) {
                 res.statusCode = 204;
             }
             else {
                 res.statusCode = 201;
             }
+            const interval = setInterval(() => {
+                res.write("0");
+            }, 1000 * 10)
+            fs.copyFileSync(originSourcePath, destinationFilePath);
+            clearInterval(interval);
 
             return res.end();
         },
@@ -724,8 +744,8 @@ export class WebdavServer {
         return reqPath;
     }
 
-    listen() {
-        this.httpServer.listen(this.option.port)
+    listen(callback?: () => void) {
+        this.httpServer.listen(this.option.port, callback);
     }
 }
 

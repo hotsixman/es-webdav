@@ -1,3 +1,4 @@
+import { DB } from 'johnson-db';
 export interface AuthInterface {
     isRegistered(user: string): Promise<boolean>;
     register(user: string, password: string): Promise<void>;
@@ -8,6 +9,11 @@ export interface AuthInterface {
 }
 export declare class AuthManager implements AuthInterface {
     userMap: Map<string, string>;
+    db: DB<{
+        user: string;
+        password: string;
+    }>;
+    constructor();
     isRegistered(user: string): Promise<boolean>;
     register(user: string, password: string): Promise<void>;
     changePassword(user: string, newPassword: string): Promise<void>;
