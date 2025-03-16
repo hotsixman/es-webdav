@@ -11,6 +11,7 @@ import { ExpectedError } from "./expected-error.js";
 import { AuthManager } from "./manager/auth-manager.js";
 import { extname } from "node:path";
 import { pipeline } from "node:stream/promises";
+import { ConnectionManager } from "./manager/connection-manager.js";
 function getHttp(version) {
     if (version === "http") {
         return http1;
@@ -411,6 +412,7 @@ export class WebdavServer {
     option;
     lockManager = new ResourceLockManager();
     authManager = new AuthManager();
+    connectionManager;
     thisServer = this;
     constructor(option) {
         this.option = {
@@ -418,7 +420,8 @@ export class WebdavServer {
             port: option?.port ?? 3000,
             middlewares: option?.middlewares,
             rootPath: resolvePath(process.cwd(), option?.rootPath ?? '.'),
-            davRootPath: option?.davRootPath ?? '/dav'
+            davRootPath: option?.davRootPath ?? '/dav',
+            maxConnection: option?.maxConnection ?? 10
         };
         if (!this.option.rootPath.endsWith('/')) {
             this.option.rootPath += '/';
@@ -444,31 +447,15 @@ export class WebdavServer {
         if (option?.lockManager) {
             this.lockManager = option.lockManager;
         }
+        this.connectionManager = new ConnectionManager(this.option.maxConnection);
         this.httpServer = getHttp(this.option.version).createServer(async (req, res) => {
-            try {
-                if (this.option.middlewares) {
-                    for (const middleware of this.option.middlewares) {
-                        await middleware(req, res, this);
-                        if (res.writableEnded) {
-                            return;
-                        }
-                    }
-                }
-                if (getReqPath(req).startsWith(this.option.davRootPath)) {
-                    for (const [method, handler] of Object.entries(WebdavServer.methodHandler)) {
-                        if (req.method.toUpperCase() === method.toUpperCase()) {
-                            return await handler(req, res, this);
-                        }
-                    }
-                }
-                res.statusCode = 404;
+            const connectionCreated = this.connectionManager.createConnection(req);
+            if (!connectionCreated) {
+                res.statusCode = 429;
                 return res.end();
             }
-            catch (err) {
-                console.error(err);
-                res.statusCode = 500;
-                return res.end();
-            }
+            await this.handleRequest(req, res);
+            this.connectionManager.destroyConnection(req);
         });
     }
     getSourcePath(reqPath) {
@@ -520,6 +507,32 @@ export class WebdavServer {
     }
     listen(callback) {
         this.httpServer.listen(this.option.port, callback);
+    }
+    async handleRequest(req, res) {
+        try {
+            if (this.option.middlewares) {
+                for (const middleware of this.option.middlewares) {
+                    await middleware(req, res, this);
+                    if (res.writableEnded) {
+                        return;
+                    }
+                }
+            }
+            if (getReqPath(req).startsWith(this.option.davRootPath)) {
+                for (const [method, handler] of Object.entries(WebdavServer.methodHandler)) {
+                    if (req.method.toUpperCase() === method.toUpperCase()) {
+                        return await handler(req, res, this);
+                    }
+                }
+            }
+            res.statusCode = 400;
+            return res.end();
+        }
+        catch (err) {
+            console.error(err);
+            res.statusCode = 500;
+            return res.end();
+        }
     }
 }
 //# sourceMappingURL=webdav-server.js.map

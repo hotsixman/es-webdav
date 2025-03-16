@@ -11,6 +11,7 @@ import { ExpectedError } from "./expected-error.js";
 import { AuthInterface, AuthManager } from "./manager/auth-manager.js";
 import { extname } from "node:path";
 import { pipeline } from "node:stream/promises";
+import { ConnectionManager } from "./manager/connection-manager.js";
 
 function getHttp(version: 'http' | 'http2') {
     if (version === "http") {
@@ -603,6 +604,7 @@ export class WebdavServer {
     option: WebdavServerOption;
     lockManager: ResourceLockInterface = new ResourceLockManager();
     authManager: AuthInterface = new AuthManager();
+    connectionManager: ConnectionManager;
     thisServer = this;
 
     constructor(option?: Partial<WebdavServerOption>) {
@@ -611,7 +613,8 @@ export class WebdavServer {
             port: option?.port ?? 3000,
             middlewares: option?.middlewares,
             rootPath: resolvePath(process.cwd(), option?.rootPath ?? '.'),
-            davRootPath: option?.davRootPath ?? '/dav'
+            davRootPath: option?.davRootPath ?? '/dav',
+            maxConnection: option?.maxConnection ?? 10
         }
         if (!this.option.rootPath.endsWith('/')) {
             this.option.rootPath += '/'
@@ -638,33 +641,18 @@ export class WebdavServer {
             this.lockManager = option.lockManager;
         }
 
+        this.connectionManager = new ConnectionManager(this.option.maxConnection);
+
+        // 서버 생성
         this.httpServer = getHttp(this.option.version).createServer(async (req, res) => {
-            try {
-                if (this.option.middlewares) {
-                    for (const middleware of this.option.middlewares) {
-                        await middleware(req, res, this);
-                        if (res.writableEnded) {
-                            return;
-                        }
-                    }
-                }
-
-                if (getReqPath(req).startsWith(this.option.davRootPath)) {
-                    for (const [method, handler] of Object.entries(WebdavServer.methodHandler)) {
-                        if (req.method.toUpperCase() === method.toUpperCase()) {
-                            return await handler(req, res, this);
-                        }
-                    }
-                }
-
-                res.statusCode = 404;
+            const connectionCreated = this.connectionManager.createConnection(req);
+            if (!connectionCreated) {
+                res.statusCode = 429;
                 return res.end();
             }
-            catch (err) {
-                console.error(err);
-                res.statusCode = 500;
-                return res.end();
-            }
+
+            await this.handleRequest(req, res);
+            this.connectionManager.destroyConnection(req);
         });
     }
 
@@ -732,6 +720,35 @@ export class WebdavServer {
     listen(callback?: () => void) {
         this.httpServer.listen(this.option.port, callback);
     }
+
+    async handleRequest(req: http2.Http2ServerRequest, res: http2.Http2ServerResponse) {
+        try {
+            if (this.option.middlewares) {
+                for (const middleware of this.option.middlewares) {
+                    await middleware(req, res, this);
+                    if (res.writableEnded) {
+                        return;
+                    }
+                }
+            }
+
+            if (getReqPath(req).startsWith(this.option.davRootPath)) {
+                for (const [method, handler] of Object.entries(WebdavServer.methodHandler)) {
+                    if (req.method.toUpperCase() === method.toUpperCase()) {
+                        return await handler(req, res, this);
+                    }
+                }
+            }
+
+            res.statusCode = 400;
+            return res.end();
+        }
+        catch (err) {
+            console.error(err);
+            res.statusCode = 500;
+            return res.end();
+        }
+    }
 }
 
 export type RequestHandler = (req: http2.Http2ServerRequest, res: http2.Http2ServerResponse, server: WebdavServer) => any | Promise<any>;
@@ -745,4 +762,5 @@ export interface WebdavServerOption {
     virtualDirectory?: Record<string, string>;
     lockManager?: ResourceLockInterface;
     authManager?: AuthInterface;
+    maxConnection: number;
 }
