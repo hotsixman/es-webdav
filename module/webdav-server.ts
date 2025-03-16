@@ -607,7 +607,8 @@ export class WebdavServer {
     connectionManager: ConnectionManager;
     thisServer = this;
 
-    constructor(option?: Partial<WebdavServerOption>) {
+    // constructor
+    constructor(option?: WebdavServerConstructorOption) {
         this.option = {
             version: option?.version ?? 'http2',
             port: option?.port ?? 3000,
@@ -764,3 +765,5 @@ export interface WebdavServerOption {
     authManager?: AuthInterface;
     maxConnection: number;
 }
+
+export type WebdavServerConstructorOption = Partial<WebdavServerOption>
